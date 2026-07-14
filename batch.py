@@ -1,0 +1,68 @@
+"""
+batch.py — run the smart cropper over a folder, with progress logging.
+
+Examples:
+    python batch.py --folder /path/to/videos --limit 5          # first 5
+    python batch.py --folder /path/to/videos --skip 5           # the rest
+    nohup python batch.py --folder /path/to/videos > logs/batch.log 2>&1 &
+
+Skips videos whose metadata JSON already exists so it is safe to resume.
+"""
+
+import argparse
+import os
+import time
+
+from cropper import DEFAULT_ALPHA, DEFAULT_PROC_WIDTH, DEFAULT_STRIDE, \
+    list_videos, process_video
+
+ROOT = os.path.dirname(os.path.abspath(__file__))
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--folder", required=True)
+    ap.add_argument("--out", default=ROOT)
+    ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--skip", type=int, default=0)
+    ap.add_argument("--alpha", type=float, default=DEFAULT_ALPHA)
+    ap.add_argument("--proc-width", type=int, default=DEFAULT_PROC_WIDTH)
+    ap.add_argument("--stride", type=int, default=DEFAULT_STRIDE)
+    ap.add_argument("--model", default=os.path.join(ROOT, "models", "yolov8n.pt"))
+    ap.add_argument("--force", action="store_true", help="reprocess even if JSON exists")
+    args = ap.parse_args()
+
+    names = list_videos(args.folder)[args.skip:]
+    if args.limit:
+        names = names[:args.limit]
+
+    meta_dir = os.path.join(args.out, "metadata")
+    os.makedirs(meta_dir, exist_ok=True)
+
+    total = len(names)
+    print(f"[batch] {total} videos from {args.folder}", flush=True)
+    t0 = time.time()
+    done = skipped = failed = 0
+    for k, name in enumerate(names, 1):
+        stem = os.path.splitext(name)[0]
+        if not args.force and os.path.exists(os.path.join(meta_dir, stem + ".json")):
+            print(f"[batch {k}/{total}] skip (exists) {name}", flush=True)
+            skipped += 1
+            continue
+        print(f"[batch {k}/{total}] {name}", flush=True)
+        try:
+            process_video(os.path.join(args.folder, name), args.out,
+                          alpha=args.alpha, proc_width=args.proc_width,
+                          stride=args.stride, model_path=args.model)
+            done += 1
+        except Exception as e:
+            print(f"[batch {k}/{total}] ERROR {name}: {e}", flush=True)
+            failed += 1
+
+    dt = time.time() - t0
+    print(f"[batch] complete: {done} done, {skipped} skipped, {failed} failed "
+          f"in {dt/60:.1f} min", flush=True)
+
+
+if __name__ == "__main__":
+    main()

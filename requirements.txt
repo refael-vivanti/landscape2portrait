@@ -1,0 +1,13 @@
+# Core CV / ML
+opencv-python>=4.9,<5     # pinned to 4.x: opencv-python 5.0.0 dropped parts of the
+                          # Python API (CascadeClassifier). Saliency is spectral-residual
+                          # (core cv2 only), so opencv-contrib is NOT required.
+ultralytics>=8.1          # YOLOv8 person detection (pulls in torch)
+mediapipe>=0.10           # optional face detector backend (Haar cascade is default)
+numpy>=1.26
+scipy>=1.11               # gaussian smoothing helpers
+matplotlib>=3.8           # heatmap colormaps for the dashboard
+
+# App / tooling
+streamlit>=1.30           # visualization dashboard
+gitpython>=3.1            # programmatic git operations

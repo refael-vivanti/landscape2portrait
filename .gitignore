@@ -1,0 +1,34 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+.ipynb_checkpoints/
+
+# ---- OS ----
+.DS_Store
+Thumbs.db
+
+# ---- Model weights (auto-downloaded) ----
+models/*.pt
+*.pt
+
+# ---- Runtime logs ----
+logs/
+
+# ---- Video inputs / rendered outputs / cached frames ----
+# Source clips are never committed. Rendered 9:16 videos and cached storyboard
+# frames are reproducible artifacts, so they stay out of git too.
+outputs/
+frames/
+*.mp4
+*.mov
+*.avi
+*.mkv
+
+# ---- Kept intentionally ----
+# metadata/*.json IS committed (lightweight, the deliverable of the algorithm).
+!metadata/
+!metadata/*.json
