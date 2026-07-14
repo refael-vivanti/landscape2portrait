@@ -13,8 +13,8 @@ import argparse
 import os
 import time
 
-from cropper import DEFAULT_ALPHA, DEFAULT_PROC_WIDTH, DEFAULT_STRIDE, \
-    list_videos, process_video
+from cropper import DEFAULT_ALPHA, DEFAULT_PROC_WIDTH, DEFAULT_FLOW_STRIDE, \
+    TERMINAL_WINDOW, list_videos, process_video
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 
@@ -27,7 +27,9 @@ def main():
     ap.add_argument("--skip", type=int, default=0)
     ap.add_argument("--alpha", type=float, default=DEFAULT_ALPHA)
     ap.add_argument("--proc-width", type=int, default=DEFAULT_PROC_WIDTH)
-    ap.add_argument("--stride", type=int, default=DEFAULT_STRIDE)
+    ap.add_argument("--flow-stride", type=int, default=DEFAULT_FLOW_STRIDE)
+    ap.add_argument("--detect-window", type=int, default=TERMINAL_WINDOW)
+    ap.add_argument("--full", action="store_true", help="detect every frame (slow)")
     ap.add_argument("--model", default=os.path.join(ROOT, "models", "yolov8n.pt"))
     ap.add_argument("--force", action="store_true", help="reprocess even if JSON exists")
     args = ap.parse_args()
@@ -53,7 +55,9 @@ def main():
         try:
             process_video(os.path.join(args.folder, name), args.out,
                           alpha=args.alpha, proc_width=args.proc_width,
-                          stride=args.stride, model_path=args.model)
+                          flow_stride=args.flow_stride,
+                          detect_window=args.detect_window, full=args.full,
+                          model_path=args.model)
             done += 1
         except Exception as e:
             print(f"[batch {k}/{total}] ERROR {name}: {e}", flush=True)

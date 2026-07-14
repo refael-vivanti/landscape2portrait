@@ -38,6 +38,7 @@ import os
 import sys
 import time
 import traceback
+from collections import deque
 
 import cv2
 import numpy as np
@@ -48,11 +49,13 @@ import numpy as np
 
 # Bump when the algorithm changes so old vs new results are distinguishable.
 # v2: detector-persistence terminal decision + centred tie-break + even H.264.
-ALGO_VERSION = 2
+# v3: fast pipeline — detect only on the trailing window + storyboard frames,
+#     optical flow at a stride with keyframe interpolation.
+ALGO_VERSION = 3
 
 DEFAULT_ALPHA = 0.15        # EMA weight on the raw target (lower = smoother)
 DEFAULT_PROC_WIDTH = 480    # width used for flow / saliency (speed vs accuracy)
-DEFAULT_STRIDE = 1          # run heavy detectors every k-th frame (carry-forward)
+DEFAULT_FLOW_STRIDE = 5     # compute optical flow every k-th frame, interpolate between
 TERMINAL_WINDOW = 10        # number of trailing frames used for the terminal decision
 STORYBOARD_TIMES = [0, 3, 6, 9, 12, 15]   # seconds sampled for the storyboard
 PORTRAIT_AR = 9.0 / 16.0    # width / height of the output
@@ -238,6 +241,25 @@ def backward_propagate(x_terminal, col_dx, n, W, crop_w):
     return x
 
 
+def backward_propagate_kf(x_terminal, keyframes, gap_dx, W, crop_w):
+    """
+    Keyframe version of the backward pass (used by the fast pipeline).
+    keyframes : ascending frame indices where flow was sampled (first = 0).
+    gap_dx[j] : per-column horizontal flow from keyframes[j] -> keyframes[j+1].
+    Returns the crop centre at each keyframe; interpolate for the rest.
+    """
+    m = len(keyframes)
+    xk = np.zeros(m, dtype=np.float64)
+    xk[-1] = x_terminal
+    half = crop_w // 2
+    for j in range(m - 2, -1, -1):
+        c = int(round(xk[j + 1]))
+        lo, hi = max(0, c - half), min(W, c + half)
+        dx = float(np.mean(gap_dx[j][lo:hi])) if hi > lo else 0.0
+        xk[j] = xk[j + 1] - dx      # content at keyframes[j+1] was here at keyframes[j]
+    return xk
+
+
 def ema_smooth(x_target, alpha, W, crop_w):
     """Forward EMA + boundary clamp of the crop centre."""
     half = crop_w // 2
@@ -254,10 +276,22 @@ def ema_smooth(x_target, alpha, W, crop_w):
 # --------------------------------------------------------------------------- #
 
 def process_video(path, out_root, alpha=DEFAULT_ALPHA, proc_width=DEFAULT_PROC_WIDTH,
-                  stride=DEFAULT_STRIDE, model_path="yolov8n.pt", render=True,
-                  verbose=True):
+                  flow_stride=DEFAULT_FLOW_STRIDE, detect_window=TERMINAL_WINDOW,
+                  model_path="yolov8n.pt", render=True, verbose=True, full=False):
+    """
+    Fast pipeline:
+      * heavy detectors (YOLO person + Haar face + saliency) run ONLY on the
+        trailing `detect_window` frames (used for the terminal decision) and on
+        the 6 storyboard frames (used for the dashboard overlays). `full=True`
+        restores per-frame detection.
+      * dense optical flow is sampled every `flow_stride` frames; the crop
+        trajectory is propagated backward across those keyframes and linearly
+        interpolated for the frames in between.
+    """
     name = os.path.splitext(os.path.basename(path))[0]
     t_start = time.time()
+    if full:
+        flow_stride = 1
 
     cap = cv2.VideoCapture(path)
     if not cap.isOpened():
@@ -271,86 +305,104 @@ def process_video(path, out_root, alpha=DEFAULT_ALPHA, proc_width=DEFAULT_PROC_W
     crop_w -= crop_w % 2                    # even width (required by H.264 yuv420p)
     scale = W / float(proc_width)           # proc-space -> full-space factor
     proc_h = max(1, int(round(H / scale)))
+    xp = np.linspace(0, W - 1, proc_width)  # proc-column -> full-column mapping
 
     if verbose:
-        print(f"[{name}] {W}x{H} @ {fps:.1f}fps  crop_w={crop_w}", flush=True)
+        print(f"[{name}] {W}x{H} @ {fps:.1f}fps  crop_w={crop_w}  "
+              f"flow_stride={flow_stride}", flush=True)
 
     person = PersonDetector(model_path)
     face = FaceDetector()
 
-    faces_all, people_all = [], []
-    sal_cols, sal_stats = [], []
-    col_dx = []                             # transition t -> t+1
-    prev_small = None
-    prev_faces, prev_people = [], []
+    def detect_frame(frame, gray, small):
+        faces = face.detect(gray)
+        people = person.detect(frame)
+        sal = saliency_map(small)
+        col_full = np.interp(np.arange(W), xp, sal.sum(axis=0))
+        return faces, people, sal, col_full, (float(sal.mean()), float(sal.max()))
 
-    story_targets = [int(round(s * fps)) for s in STORYBOARD_TIMES]
+    story_targets = {int(round(s * fps)) for s in STORYBOARD_TIMES}
     story_dir = os.path.join(out_root, "frames", name)
     os.makedirs(story_dir, exist_ok=True)
     storyboard = []
+
+    dets = {}                          # frame index -> (faces, people, (sal_mean, sal_max))
+    sal_col_by_i = {}                  # frame index -> saliency column profile (len W)
+    keyframes, gap_dx = [], []         # flow sample indices + per-gap column dx (len W)
+    prev_kf_small, prev_kf_idx = None, None
+    last_small, last_idx = None, None
+    ring = deque(maxlen=detect_window)  # trailing (idx, frame, gray, small)
 
     i = 0
     while True:
         ok, frame = cap.read()
         if not ok:
             break
-
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         small = cv2.resize(gray, (proc_width, proc_h))
 
-        # ---- detectors (respect stride, carry forward on skipped frames) ----
-        if i % stride == 0:
-            people = person.detect(frame)
-            faces = face.detect(gray)
-            prev_faces, prev_people = faces, people
-        else:
-            people, faces = prev_people, prev_faces
-        faces_all.append(faces)
-        people_all.append(people)
+        # ---- optical flow at keyframes ----
+        if prev_kf_small is None:
+            keyframes.append(i)                     # first keyframe, no preceding gap
+            prev_kf_small, prev_kf_idx = small, i
+        elif i - prev_kf_idx >= flow_stride:
+            dx = np.interp(np.arange(W), xp, flow_column_dx(prev_kf_small, small)) * scale
+            keyframes.append(i)
+            gap_dx.append(dx)
+            prev_kf_small, prev_kf_idx = small, i
+        last_small, last_idx = small, i
 
-        # ---- saliency (proc resolution) -> column profile scaled to full W ----
-        sal = saliency_map(small)
-        col = sal.sum(axis=0)                       # length proc_width
-        col_full = np.interp(np.arange(W), np.linspace(0, W - 1, proc_width), col)
-        sal_cols.append(col_full)
-        sal_stats.append((float(sal.mean()), float(sal.max())))
-
-        # ---- optical flow (proc resolution) -> per-column dx in full px ----
-        if prev_small is not None:
-            dx_small = flow_column_dx(prev_small, small)          # length proc_width
-            dx_full = np.interp(np.arange(W),
-                                np.linspace(0, W - 1, proc_width),
-                                dx_small) * scale                 # scale to full px
-            col_dx.append(dx_full)
-        prev_small = small
-
-        # ---- storyboard raw frame + saliency png ----
+        # ---- detection: storyboard frames now, trailing window after the loop ----
+        want = full or (i in story_targets)
         if i in story_targets:
+            faces, people, sal, col_full, stt = detect_frame(frame, gray, small)
+            dets[i] = (faces, people, stt)
+            sal_col_by_i[i] = col_full
             fpath = os.path.join(story_dir, f"f_{i}.jpg")
             spath = os.path.join(story_dir, f"s_{i}.png")
             cv2.imwrite(fpath, frame)
             cv2.imwrite(spath, (sal * 255).astype(np.uint8))
-            storyboard.append({
-                "t": round(i / fps, 2), "i": i,
-                "frame": os.path.relpath(fpath, out_root),
-                "saliency": os.path.relpath(spath, out_root),
-            })
+            storyboard.append({"t": round(i / fps, 2), "i": i,
+                               "frame": os.path.relpath(fpath, out_root),
+                               "saliency": os.path.relpath(spath, out_root)})
+        elif full:
+            faces, people, sal, col_full, stt = detect_frame(frame, gray, small)
+            dets[i] = (faces, people, stt)
+            sal_col_by_i[i] = col_full
+
+        ring.append((i, frame, gray, small))
         i += 1
 
     cap.release()
     n = i
     if n == 0:
         raise RuntimeError(f"no frames decoded: {path}")
-    if len(col_dx) < n - 1:                          # single-frame guard
-        col_dx.append(np.zeros(W))
 
-    # ---- terminal decision (last TERMINAL_WINDOW frames) ----
-    w0 = max(0, n - TERMINAL_WINDOW)
-    x_terminal, source = decide_terminal_target(
-        faces_all[w0:], people_all[w0:], sal_cols[w0:], W, crop_w)
+    # close the final flow gap so the last frame is a keyframe
+    if keyframes[-1] != last_idx:
+        dx = np.interp(np.arange(W), xp, flow_column_dx(prev_kf_small, last_small)) * scale
+        keyframes.append(last_idx)
+        gap_dx.append(dx)
+    if not gap_dx:                                   # single-frame guard
+        keyframes = [0, max(0, n - 1)]
+        gap_dx = [np.zeros(W)]
 
-    # ---- backward propagation + smoothing ----
-    x_target = backward_propagate(x_terminal, col_dx, n, W, crop_w)
+    # ---- detect the trailing window (for the terminal decision) ----
+    for idx, frame, gray, small in ring:
+        if idx not in dets:
+            faces, people, sal, col_full, stt = detect_frame(frame, gray, small)
+            dets[idx] = (faces, people, stt)
+            sal_col_by_i[idx] = col_full
+
+    w0 = max(0, n - detect_window)
+    faces_win = [dets[k][0] for k in range(w0, n) if k in dets]
+    people_win = [dets[k][1] for k in range(w0, n) if k in dets]
+    sal_win = [sal_col_by_i[k] for k in range(w0, n) if k in sal_col_by_i]
+    x_terminal, source = decide_terminal_target(faces_win, people_win, sal_win, W, crop_w)
+
+    # ---- backward propagation across keyframes + interpolation + smoothing ----
+    xk = backward_propagate_kf(x_terminal, keyframes, gap_dx, W, crop_w)
+    x_target = np.interp(np.arange(n), keyframes, xk)
     x_smooth = ema_smooth(x_target, alpha, W, crop_w)
 
     # ---- render 9:16 output ----
@@ -362,24 +414,24 @@ def process_video(path, out_root, alpha=DEFAULT_ALPHA, proc_width=DEFAULT_PROC_W
         _render(path, out_path, x_smooth, crop_w, H, fps)
         out_video_rel = os.path.relpath(out_path, out_root)
 
-    # ---- metadata JSON ----
+    # ---- metadata JSON (detections present only where computed) ----
     half = crop_w // 2
     frames_meta = []
     for t in range(n):
         c = float(x_smooth[t])
         x0 = int(np.clip(round(c - half), 0, W - crop_w))
+        faces, people, stt = dets.get(t, ([], [], (0.0, 0.0)))
         frames_meta.append({
             "i": t,
             "t": round(t / fps, 3),
             "x_target": round(float(x_target[t]), 2),
             "x_smooth": round(c, 2),
-            "dx": round(float(col_dx[t - 1][max(0, int(c) - half):int(c) + half].mean()), 3)
-                  if t > 0 else 0.0,
+            "dx": round(float(x_target[t] - x_target[t - 1]), 3) if t > 0 else 0.0,
             "crop": [x0, 0, x0 + crop_w, H],
-            "faces": faces_all[t],
-            "people": people_all[t],
-            "saliency": {"mean": round(sal_stats[t][0], 4),
-                         "max": round(sal_stats[t][1], 4)},
+            "faces": faces,
+            "people": people,
+            "saliency": {"mean": round(stt[0], 4), "max": round(stt[1], 4)},
+            "detected": t in dets,
         })
 
     meta = {
@@ -389,9 +441,10 @@ def process_video(path, out_root, alpha=DEFAULT_ALPHA, proc_width=DEFAULT_PROC_W
         "algo_version": ALGO_VERSION,
         "crop_width": crop_w, "crop_height": H, "aspect": "9:16",
         "terminal": {"source": source, "x_target": int(x_terminal),
-                     "window": min(TERMINAL_WINDOW, n)},
-        "params": {"alpha": alpha, "proc_width": proc_width, "stride": stride,
-                   "model": os.path.basename(model_path)},
+                     "window": min(detect_window, n)},
+        "params": {"alpha": alpha, "proc_width": proc_width,
+                   "flow_stride": flow_stride, "detect_window": detect_window,
+                   "full": full, "model": os.path.basename(model_path)},
         "output_video": out_video_rel,
         "storyboard": storyboard,
         "frames": frames_meta,
@@ -470,7 +523,12 @@ def main():
     ap.add_argument("--skip", type=int, default=0, help="skip first N videos")
     ap.add_argument("--alpha", type=float, default=DEFAULT_ALPHA)
     ap.add_argument("--proc-width", type=int, default=DEFAULT_PROC_WIDTH)
-    ap.add_argument("--stride", type=int, default=DEFAULT_STRIDE)
+    ap.add_argument("--flow-stride", type=int, default=DEFAULT_FLOW_STRIDE,
+                    help="compute optical flow every k-th frame (interpolate between)")
+    ap.add_argument("--detect-window", type=int, default=TERMINAL_WINDOW,
+                    help="number of trailing frames to run detectors on")
+    ap.add_argument("--full", action="store_true",
+                    help="run detectors on every frame (slow, spec-faithful)")
     ap.add_argument("--model", default=os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "models", "yolov8n.pt"))
     ap.add_argument("--no-render", action="store_true")
@@ -492,7 +550,8 @@ def main():
     for p in targets:
         try:
             process_video(p, args.out, alpha=args.alpha, proc_width=args.proc_width,
-                          stride=args.stride, model_path=args.model,
+                          flow_stride=args.flow_stride, detect_window=args.detect_window,
+                          full=args.full, model_path=args.model,
                           render=not args.no_render)
             ok += 1
         except Exception as e:

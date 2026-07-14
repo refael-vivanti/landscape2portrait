@@ -135,7 +135,19 @@ nohup python batch.py --folder /Users/refaelv/Documents/CV/smart_crop_videos \
 ```
 
 Useful flags: `--alpha` (smoothing), `--proc-width` (flow/saliency resolution),
-`--stride` (run detectors every k-th frame), `--no-render` (metadata only).
+`--flow-stride` (compute flow every k-th frame, interpolate between),
+`--detect-window` (trailing frames to detect on), `--full` (detect every frame,
+slow/spec-faithful), `--no-render` (metadata only).
+
+### Performance
+
+Detection (YOLO) and saliency are only *needed* for the terminal-frame decision
+(the last `--detect-window` frames) and for the 6 storyboard overlays, so by
+default they run on ~16 frames instead of every frame. Optical flow is sampled
+every `--flow-stride` frames and the crop trajectory is interpolated across those
+keyframes (EMA smooths the rest). This cuts a ~520-frame clip from **~185 s to
+~10 s (~18×)** with a near-identical trajectory. Use `--full --flow-stride 1`
+for the exhaustive per-frame version.
 
 ## Run the dashboard
 
