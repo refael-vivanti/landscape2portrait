@@ -51,11 +51,13 @@ import numpy as np
 # v2: detector-persistence terminal decision + centred tie-break + even H.264.
 # v3: fast pipeline — detect only on the trailing window + storyboard frames,
 #     optical flow at a stride with keyframe interpolation.
-ALGO_VERSION = 3
+# v4: saliency re-anchoring during the backward pass to correct flow drift.
+ALGO_VERSION = 4
 
 DEFAULT_ALPHA = 0.15        # EMA weight on the raw target (lower = smoother)
 DEFAULT_PROC_WIDTH = 480    # width used for flow / saliency (speed vs accuracy)
 DEFAULT_FLOW_STRIDE = 5     # compute optical flow every k-th frame, interpolate between
+DEFAULT_ANCHOR = 0.5        # blend toward per-keyframe saliency to fight flow drift (0=pure flow)
 TERMINAL_WINDOW = 10        # number of trailing frames used for the terminal decision
 STORYBOARD_TIMES = [0, 3, 6, 9, 12, 15]   # seconds sampled for the storyboard
 PORTRAIT_AR = 9.0 / 16.0    # width / height of the output
@@ -241,11 +243,17 @@ def backward_propagate(x_terminal, col_dx, n, W, crop_w):
     return x
 
 
-def backward_propagate_kf(x_terminal, keyframes, gap_dx, W, crop_w):
+def backward_propagate_kf(x_terminal, keyframes, gap_dx, W, crop_w,
+                          kf_sal=None, anchor=0.0):
     """
     Keyframe version of the backward pass (used by the fast pipeline).
     keyframes : ascending frame indices where flow was sampled (first = 0).
     gap_dx[j] : per-column horizontal flow from keyframes[j] -> keyframes[j+1].
+
+    Pure optical-flow integration drifts over long clips, so when per-keyframe
+    saliency profiles (``kf_sal``) are supplied and ``anchor`` > 0, each step is a
+    blend of the flow-propagated centre and that keyframe's saliency-optimal
+    centre. ``anchor=0`` reproduces the pure-flow (spec) behaviour.
     Returns the crop centre at each keyframe; interpolate for the rest.
     """
     m = len(keyframes)
@@ -256,7 +264,12 @@ def backward_propagate_kf(x_terminal, keyframes, gap_dx, W, crop_w):
         c = int(round(xk[j + 1]))
         lo, hi = max(0, c - half), min(W, c + half)
         dx = float(np.mean(gap_dx[j][lo:hi])) if hi > lo else 0.0
-        xk[j] = xk[j + 1] - dx      # content at keyframes[j+1] was here at keyframes[j]
+        flow_pos = xk[j + 1] - dx    # content at keyframes[j+1] was here at keyframes[j]
+        if anchor > 0 and kf_sal is not None and kf_sal[j] is not None:
+            sal_pos = _window_argmax(kf_sal[j], crop_w)   # drift-correcting anchor
+            xk[j] = anchor * sal_pos + (1 - anchor) * flow_pos
+        else:
+            xk[j] = flow_pos
     return xk
 
 
@@ -277,7 +290,8 @@ def ema_smooth(x_target, alpha, W, crop_w):
 
 def process_video(path, out_root, alpha=DEFAULT_ALPHA, proc_width=DEFAULT_PROC_WIDTH,
                   flow_stride=DEFAULT_FLOW_STRIDE, detect_window=TERMINAL_WINDOW,
-                  model_path="yolov8n.pt", render=True, verbose=True, full=False):
+                  anchor=DEFAULT_ANCHOR, model_path="yolov8n.pt", render=True,
+                  verbose=True, full=False):
     """
     Fast pipeline:
       * heavy detectors (YOLO person + Haar face + saliency) run ONLY on the
@@ -326,9 +340,12 @@ def process_video(path, out_root, alpha=DEFAULT_ALPHA, proc_width=DEFAULT_PROC_W
     os.makedirs(story_dir, exist_ok=True)
     storyboard = []
 
+    def sal_col(small_gray):
+        return np.interp(np.arange(W), xp, saliency_map(small_gray).sum(axis=0))
+
     dets = {}                          # frame index -> (faces, people, (sal_mean, sal_max))
     sal_col_by_i = {}                  # frame index -> saliency column profile (len W)
-    keyframes, gap_dx = [], []         # flow sample indices + per-gap column dx (len W)
+    keyframes, gap_dx, kf_sal = [], [], []   # flow indices + per-gap dx + per-keyframe saliency
     prev_kf_small, prev_kf_idx = None, None
     last_small, last_idx = None, None
     ring = deque(maxlen=detect_window)  # trailing (idx, frame, gray, small)
@@ -341,14 +358,16 @@ def process_video(path, out_root, alpha=DEFAULT_ALPHA, proc_width=DEFAULT_PROC_W
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         small = cv2.resize(gray, (proc_width, proc_h))
 
-        # ---- optical flow at keyframes ----
+        # ---- optical flow + saliency at keyframes ----
         if prev_kf_small is None:
             keyframes.append(i)                     # first keyframe, no preceding gap
+            kf_sal.append(sal_col(small))
             prev_kf_small, prev_kf_idx = small, i
         elif i - prev_kf_idx >= flow_stride:
             dx = np.interp(np.arange(W), xp, flow_column_dx(prev_kf_small, small)) * scale
             keyframes.append(i)
             gap_dx.append(dx)
+            kf_sal.append(sal_col(small))
             prev_kf_small, prev_kf_idx = small, i
         last_small, last_idx = small, i
 
@@ -383,9 +402,11 @@ def process_video(path, out_root, alpha=DEFAULT_ALPHA, proc_width=DEFAULT_PROC_W
         dx = np.interp(np.arange(W), xp, flow_column_dx(prev_kf_small, last_small)) * scale
         keyframes.append(last_idx)
         gap_dx.append(dx)
+        kf_sal.append(sal_col(last_small))
     if not gap_dx:                                   # single-frame guard
         keyframes = [0, max(0, n - 1)]
         gap_dx = [np.zeros(W)]
+        kf_sal = [kf_sal[0] if kf_sal else np.zeros(W)] * 2
 
     # ---- detect the trailing window (for the terminal decision) ----
     for idx, frame, gray, small in ring:
@@ -401,7 +422,8 @@ def process_video(path, out_root, alpha=DEFAULT_ALPHA, proc_width=DEFAULT_PROC_W
     x_terminal, source = decide_terminal_target(faces_win, people_win, sal_win, W, crop_w)
 
     # ---- backward propagation across keyframes + interpolation + smoothing ----
-    xk = backward_propagate_kf(x_terminal, keyframes, gap_dx, W, crop_w)
+    xk = backward_propagate_kf(x_terminal, keyframes, gap_dx, W, crop_w,
+                               kf_sal=kf_sal, anchor=anchor)
     x_target = np.interp(np.arange(n), keyframes, xk)
     x_smooth = ema_smooth(x_target, alpha, W, crop_w)
 
@@ -444,7 +466,8 @@ def process_video(path, out_root, alpha=DEFAULT_ALPHA, proc_width=DEFAULT_PROC_W
                      "window": min(detect_window, n)},
         "params": {"alpha": alpha, "proc_width": proc_width,
                    "flow_stride": flow_stride, "detect_window": detect_window,
-                   "full": full, "model": os.path.basename(model_path)},
+                   "anchor": anchor, "full": full,
+                   "model": os.path.basename(model_path)},
         "output_video": out_video_rel,
         "storyboard": storyboard,
         "frames": frames_meta,
@@ -527,6 +550,8 @@ def main():
                     help="compute optical flow every k-th frame (interpolate between)")
     ap.add_argument("--detect-window", type=int, default=TERMINAL_WINDOW,
                     help="number of trailing frames to run detectors on")
+    ap.add_argument("--anchor", type=float, default=DEFAULT_ANCHOR,
+                    help="0..1 blend toward per-keyframe saliency (0=pure flow)")
     ap.add_argument("--full", action="store_true",
                     help="run detectors on every frame (slow, spec-faithful)")
     ap.add_argument("--model", default=os.path.join(
@@ -551,7 +576,7 @@ def main():
         try:
             process_video(p, args.out, alpha=args.alpha, proc_width=args.proc_width,
                           flow_stride=args.flow_stride, detect_window=args.detect_window,
-                          full=args.full, model_path=args.model,
+                          anchor=args.anchor, full=args.full, model_path=args.model,
                           render=not args.no_render)
             ok += 1
         except Exception as e:

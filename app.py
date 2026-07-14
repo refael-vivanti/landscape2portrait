@@ -110,7 +110,7 @@ if not index:
                "Run `python cropper.py --folder <videos> --limit 5` first.")
     st.stop()
 
-CURRENT_ALGO = 3   # keep in sync with cropper.ALGO_VERSION
+CURRENT_ALGO = 4   # keep in sync with cropper.ALGO_VERSION
 
 names = list(index.keys())
 st.sidebar.header("Videos")

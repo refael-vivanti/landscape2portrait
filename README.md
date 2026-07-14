@@ -136,8 +136,19 @@ nohup python batch.py --folder /Users/refaelv/Documents/CV/smart_crop_videos \
 
 Useful flags: `--alpha` (smoothing), `--proc-width` (flow/saliency resolution),
 `--flow-stride` (compute flow every k-th frame, interpolate between),
-`--detect-window` (trailing frames to detect on), `--full` (detect every frame,
-slow/spec-faithful), `--no-render` (metadata only).
+`--detect-window` (trailing frames to detect on), `--anchor` (0..1 blend toward
+per-keyframe saliency to correct flow drift; `0` = pure backward flow),
+`--full` (detect every frame, slow/spec-faithful), `--no-render` (metadata only).
+
+### Drift correction (`--anchor`)
+
+Pure optical-flow integration from the terminal frame accumulates error over a
+long clip, so the crop can end up off the subject in the early frames. Because
+saliency is nearly free, it is computed at every flow keyframe and the backward
+pass blends the flow-propagated centre with that keyframe's saliency-optimal
+centre (`--anchor`, default `0.5`). This keeps the salient subject centred
+throughout while flow preserves continuity. `--anchor 0` reproduces the strict
+optical-flow-only backward pass from the spec.
 
 ### Performance
 
