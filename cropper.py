@@ -46,6 +46,10 @@ import numpy as np
 # Configuration
 # --------------------------------------------------------------------------- #
 
+# Bump when the algorithm changes so old vs new results are distinguishable.
+# v2: detector-persistence terminal decision + centred tie-break + even H.264.
+ALGO_VERSION = 2
+
 DEFAULT_ALPHA = 0.15        # EMA weight on the raw target (lower = smoother)
 DEFAULT_PROC_WIDTH = 480    # width used for flow / saliency (speed vs accuracy)
 DEFAULT_STRIDE = 1          # run heavy detectors every k-th frame (carry-forward)
@@ -382,6 +386,7 @@ def process_video(path, out_root, alpha=DEFAULT_ALPHA, proc_width=DEFAULT_PROC_W
         "video": os.path.basename(path),
         "path": path,
         "width": W, "height": H, "fps": round(fps, 3), "n_frames": n,
+        "algo_version": ALGO_VERSION,
         "crop_width": crop_w, "crop_height": H, "aspect": "9:16",
         "terminal": {"source": source, "x_target": int(x_terminal),
                      "window": min(TERMINAL_WINDOW, n)},

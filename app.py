@@ -110,11 +110,26 @@ if not index:
                "Run `python cropper.py --folder <videos> --limit 5` first.")
     st.stop()
 
+CURRENT_ALGO = 2   # keep in sync with cropper.ALGO_VERSION
+
 names = list(index.keys())
 st.sidebar.header("Videos")
-st.sidebar.caption(f"{len(names)} processed")
-choice = st.sidebar.radio("Select", names, label_visibility="collapsed")
+n_new = sum(1 for m in index.values() if m.get("algo_version", 1) >= CURRENT_ALGO)
+st.sidebar.caption(f"{len(names)} processed · {n_new} on current algo (v{CURRENT_ALGO})")
+# mark each entry in the sidebar list so old results are obvious
+labels = {n: f'{"✅" if index[n].get("algo_version",1) >= CURRENT_ALGO else "⚠️"} {n}'
+          for n in names}
+choice = st.sidebar.radio("Select", names, format_func=lambda n: labels[n],
+                          label_visibility="collapsed")
 meta = index[choice]
+
+ver = meta.get("algo_version", 1)
+if ver >= CURRENT_ALGO:
+    st.success(f"✅ Algorithm v{ver} (current — includes the false-positive / "
+               "centering fixes).")
+else:
+    st.warning(f"⚠️ Algorithm v{ver} (OLD result — predates the fixes). "
+               "Re-run the cropper on this video to update it.")
 
 # ---- summary ----
 c1, c2, c3, c4 = st.columns(4)
