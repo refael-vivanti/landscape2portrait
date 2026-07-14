@@ -186,6 +186,8 @@ st.subheader("Rendered 9:16 output")
 out = meta.get("output_video")
 out_path = os.path.join(ROOT, out) if out else None
 if out_path and os.path.exists(out_path):
-    st.video(out_path)
+    # portrait video at full width is huge — pin it to a narrow column so it fits
+    vcol, _ = st.columns([1, 4])
+    vcol.video(out_path)
 else:
     st.info("Rendered video not found (run cropper without --no-render).")

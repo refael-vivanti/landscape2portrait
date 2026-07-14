@@ -163,14 +163,23 @@ def flow_column_dx(prev_gray, cur_gray):
 # --------------------------------------------------------------------------- #
 
 def _window_argmax(profile, crop_w):
-    """Centre x that maximises the summed profile over a crop_w-wide window."""
+    """Centre x that maximises the summed profile over a crop_w-wide window.
+
+    When several window positions tie (e.g. a small subject fits many ways), the
+    central one is chosen so the subject ends up centred rather than jammed
+    against an edge. An empty profile returns the frame centre.
+    """
     W = len(profile)
     crop_w = min(crop_w, W)
     csum = np.concatenate([[0.0], np.cumsum(profile)])
     # window [i, i+crop_w) sum = csum[i+crop_w] - csum[i]
     win = csum[crop_w:] - csum[:W - crop_w + 1]
-    i = int(np.argmax(win))
-    return i + crop_w // 2  # centre
+    mx = float(win.max())
+    if mx <= 0:
+        return W // 2
+    near = np.flatnonzero(win >= mx - 1e-9)   # all (near-)optimal left edges
+    i = int(near[len(near) // 2])             # central one -> centres the content
+    return i + crop_w // 2
 
 
 def _boxes_profile(boxes_per_frame, W):
@@ -185,18 +194,25 @@ def _boxes_profile(boxes_per_frame, W):
     return prof
 
 
-def decide_terminal_target(faces_pf, people_pf, sal_cols, W, crop_w):
+def decide_terminal_target(faces_pf, people_pf, sal_cols, W, crop_w, min_frac=0.3):
     """
     Pick X_target for the terminal frame from the last TERMINAL_WINDOW frames.
     Strict hierarchy: faces > people > saliency.
+
+    A detector only "wins" if it fires in at least ``min_frac`` of the trailing
+    frames, so a single-frame false positive (common with Haar cascades on
+    high-contrast textures) does not hijack the decision away from saliency.
     Returns (x_target, source).
     """
-    if any(len(f) for f in faces_pf):
-        prof = _boxes_profile(faces_pf, W)
-        return _window_argmax(prof, crop_w), "faces"
-    if any(len(p) for p in people_pf):
-        prof = _boxes_profile(people_pf, W)
-        return _window_argmax(prof, crop_w), "people"
+    n = max(1, len(sal_cols))
+    need = max(1, int(round(min_frac * n)))
+    face_hits = sum(1 for f in faces_pf if len(f))
+    people_hits = sum(1 for p in people_pf if len(p))
+
+    if face_hits >= need:
+        return _window_argmax(_boxes_profile(faces_pf, W), crop_w), "faces"
+    if people_hits >= need:
+        return _window_argmax(_boxes_profile(people_pf, W), crop_w), "people"
     prof = np.sum(np.asarray(sal_cols), axis=0)
     return _window_argmax(prof, crop_w), "saliency"
 
@@ -248,6 +264,7 @@ def process_video(path, out_root, alpha=DEFAULT_ALPHA, proc_width=DEFAULT_PROC_W
 
     crop_w = int(round(H * PORTRAIT_AR))
     crop_w = min(crop_w, W)                 # never wider than the frame
+    crop_w -= crop_w % 2                    # even width (required by H.264 yuv420p)
     scale = W / float(proc_width)           # proc-space -> full-space factor
     proc_h = max(1, int(round(H / scale)))
 
@@ -389,10 +406,21 @@ def process_video(path, out_root, alpha=DEFAULT_ALPHA, proc_width=DEFAULT_PROC_W
 
 
 def _render(src_path, out_path, x_smooth, crop_w, H, fps):
+    """Crop each frame and write an H.264 (yuv420p, faststart) mp4 so the result
+    plays in browsers / the Streamlit dashboard. Falls back to the avc1 writer
+    when ffmpeg is not on PATH."""
+    import shutil
+    import subprocess
+
+    ffmpeg = shutil.which("ffmpeg")
     cap = cv2.VideoCapture(src_path)
     W = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    writer = cv2.VideoWriter(out_path, fourcc, fps, (crop_w, H))
+
+    # With ffmpeg we write a raw mp4v temp and transcode; without it we ask cv2
+    # for avc1 (H.264) directly.
+    tmp = out_path + ".tmp.mp4" if ffmpeg else out_path
+    fourcc = cv2.VideoWriter_fourcc(*("mp4v" if ffmpeg else "avc1"))
+    writer = cv2.VideoWriter(tmp, fourcc, fps, (crop_w, H))
     half = crop_w // 2
     t = 0
     while True:
@@ -405,6 +433,16 @@ def _render(src_path, out_path, x_smooth, crop_w, H, fps):
         t += 1
     writer.release()
     cap.release()
+
+    if ffmpeg:
+        subprocess.run(
+            [ffmpeg, "-y", "-loglevel", "error", "-i", tmp,
+             "-c:v", "libx264", "-pix_fmt", "yuv420p",
+             "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+             "-movflags", "+faststart", out_path],
+            check=True,
+        )
+        os.remove(tmp)
 
 
 # --------------------------------------------------------------------------- #
