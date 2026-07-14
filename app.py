@@ -34,8 +34,8 @@ CROP_COLOR = (0, 255, 0)       # green (BGR)
 # Data loading
 # --------------------------------------------------------------------------- #
 
-@st.cache_data(show_spinner=False)
 def load_index():
+    # Not cached: metadata is overwritten live by the batch, so always read fresh.
     if not os.path.isdir(META_DIR):
         return {}
     out = {}
