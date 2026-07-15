@@ -37,8 +37,11 @@ def main():
     ap.add_argument("--model", default=os.path.join(ROOT, "models", "yolov8n.pt"))
     ap.add_argument("--force", action="store_true", help="reprocess even if JSON exists")
     ap.add_argument("--ai-eval", action="store_true",
-                    help="run Gemini VLM evaluation after each video (needs GEMINI_API_KEY)")
-    ap.add_argument("--ai-model", default="gemini-2.5-flash")
+                    help="run VLM evaluation after each video (needs a provider key)")
+    ap.add_argument("--ai-provider", default="auto",
+                    choices=["auto", "llama", "openai", "gemini"],
+                    help="auto picks by which key is set: llama > openai > gemini")
+    ap.add_argument("--ai-model", default=None, help="override per-provider default model")
     args = ap.parse_args()
 
     available = list_videos(args.folder)
@@ -84,7 +87,8 @@ def main():
             if args.ai_eval:
                 from evaluate import evaluate_and_update
                 meta_path = os.path.join(meta_dir, stem + ".json")
-                s, r = evaluate_and_update(meta_path, args.out, model=args.ai_model)
+                s, r = evaluate_and_update(meta_path, args.out,
+                                           provider=args.ai_provider, model=args.ai_model)
                 print(f"[batch {k}/{total}] AI score={s}", flush=True)
             done += 1
         except Exception as e:

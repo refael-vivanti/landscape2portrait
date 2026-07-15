@@ -130,17 +130,27 @@ saliency profiles.
 ### 2. AI (VLM) director score
 
 `evaluate.py` composes the 6 storyboard frames (with green crop overlays) into a
-grid and sends it to Google **Gemini** (`gemini-2.5-flash` by default), asking for
-a 1.0–5.0 rating of subject retention + temporal flow. The parsed
-`ai_score` / `ai_reasoning` are merged into the video's JSON.
+grid and asks a vision LLM for a 1.0–5.0 rating of subject retention + temporal
+flow. The parsed `ai_score` / `ai_reasoning` are merged into the video's JSON.
+
+It is **provider-agnostic**, auto-selecting by whichever key is set
+(`llama > openai > gemini`), or force one with `--ai-provider`:
+
+| Provider | Key | Notes |
+|---|---|---|
+| `llama` | `LLAMA_API_KEY` | Meta Llama API (OpenAI-compatible, `https://api.llama.com/compat/v1`). Recommended for Meta FTEs: high rate limits, data stays on approved infra. |
+| `openai` | `OPENAI_API_KEY` | Any OpenAI-compatible endpoint (`OPENAI_BASE_URL` to override). |
+| `gemini` | `GEMINI_API_KEY` / `GOOGLE_API_KEY` | Google Gemini (free tier is heavily rate-limited). |
 
 ```bash
-pip install google-genai
-export GEMINI_API_KEY=...              # or GOOGLE_API_KEY
+pip install openai google-genai
+# pick a provider by exporting its key (put it in .env — git-ignored):
+export LLAMA_API_KEY=...               # or OPENAI_API_KEY / GEMINI_API_KEY
 # during batch:
-python batch.py --folder <videos> --ai-eval --ai-model gemini-2.5-flash
+python batch.py --folder <videos> --ai-eval               # auto-detect provider
+python batch.py --folder <videos> --ai-eval --ai-provider llama
 # or standalone on one result:
-python evaluate.py --meta metadata/<video>.json
+python evaluate.py --meta metadata/<video>.json --provider llama
 ```
 
 Without a key it degrades gracefully (`ai_score=null`, explanatory
