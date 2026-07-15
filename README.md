@@ -173,6 +173,10 @@ python cropper.py --folder /Users/refaelv/Documents/CV/smart_crop_videos --limit
 mkdir -p logs
 nohup python batch.py --folder /Users/refaelv/Documents/CV/smart_crop_videos \
       --skip 5 > logs/batch.log 2>&1 &
+
+# canonical smoke test — the fixed 10-video set in smoke_set.txt
+python batch.py --folder /Users/refaelv/Documents/CV/smart_crop_videos \
+      --list smoke_set.txt --force
 ```
 
 Useful flags: `--alpha` (smoothing), `--proc-width` (flow/saliency resolution),

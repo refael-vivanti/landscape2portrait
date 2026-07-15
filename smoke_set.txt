@@ -1,0 +1,13 @@
+# Canonical smoke-test set: 10 representative videos.
+# Run with:  python batch.py --folder <videos> --list smoke_set.txt --force
+# One video id (or filename) per line; '#' comments and blank lines are ignored.
+10398657
+13965282
+14627395
+12142075
+11353413
+16436843
+10388072
+14369070
+11967303
+16577316

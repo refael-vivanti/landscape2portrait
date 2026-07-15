@@ -25,6 +25,9 @@ def main():
     ap.add_argument("--out", default=ROOT)
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--skip", type=int, default=0)
+    ap.add_argument("--list", dest="listfile",
+                    help="file with one video id/filename per line "
+                         "(overrides --limit/--skip; e.g. smoke_set.txt)")
     ap.add_argument("--alpha", type=float, default=DEFAULT_ALPHA)
     ap.add_argument("--proc-width", type=int, default=DEFAULT_PROC_WIDTH)
     ap.add_argument("--flow-stride", type=int, default=DEFAULT_FLOW_STRIDE)
@@ -38,9 +41,25 @@ def main():
     ap.add_argument("--ai-model", default="gemini-2.5-flash")
     args = ap.parse_args()
 
-    names = list_videos(args.folder)[args.skip:]
-    if args.limit:
-        names = names[:args.limit]
+    available = list_videos(args.folder)
+    if args.listfile:
+        avail_set = set(available)
+        names = []
+        with open(args.listfile) as fh:
+            for line in fh:
+                s = line.strip()
+                if not s or s.startswith("#"):
+                    continue
+                if s in avail_set:
+                    names.append(s)
+                elif s + ".mp4" in avail_set:
+                    names.append(s + ".mp4")
+                else:
+                    print(f"[batch] WARN: '{s}' not found in {args.folder}", flush=True)
+    else:
+        names = available[args.skip:]
+        if args.limit:
+            names = names[:args.limit]
 
     meta_dir = os.path.join(args.out, "metadata")
     os.makedirs(meta_dir, exist_ok=True)
