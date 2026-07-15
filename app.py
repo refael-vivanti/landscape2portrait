@@ -131,7 +131,25 @@ else:
     st.warning(f"⚠️ Algorithm v{ver} (OLD result — predates the fixes). "
                "Re-run the cropper on this video to update it.")
 
-# ---- summary ----
+# ---- evaluation summary cards (prominent) ----
+scores = meta.get("frame_scores", [])
+avg_math = (sum(scores) / len(scores)) if scores else None
+ai_score = meta.get("ai_score")
+
+e1, e2 = st.columns(2)
+e1.metric("📐 Average Math Score",
+          f"{avg_math * 100:.1f}%" if avg_math is not None else "—",
+          help="Mean of the per-frame quality score: 0.7·object-coverage + "
+               "0.3·saliency-coverage inside the crop window.")
+e2.metric("🤖 AI Director Score",
+          f"{ai_score:.1f} / 5.0" if isinstance(ai_score, (int, float)) else "—",
+          help="Gemini VLM rating of the 6-frame storyboard (subject retention "
+               "+ temporal flow). Run the batch with --ai-eval to populate.")
+if meta.get("ai_reasoning"):
+    (st.info if isinstance(ai_score, (int, float)) else st.caption)(
+        f'**AI reasoning:** {meta["ai_reasoning"]}')
+
+# ---- technical summary ----
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Resolution", f'{meta["width"]}×{meta["height"]}')
 c2.metric("Frames", meta["n_frames"])
@@ -190,11 +208,23 @@ right.write({
     "saliency mean": fmeta["saliency"]["mean"],
 })
 
-# ---- trajectory chart ----
-st.subheader("Crop-centre trajectory X(t)")
-xs = [f["x_smooth"] for f in meta["frames"]]
-xt = [f["x_target"] for f in meta["frames"]]
-st.line_chart({"x_smooth (rendered)": xs, "x_target (raw backward pass)": xt})
+# ---- trajectory + quality charts ----
+cta, ctb = st.columns(2)
+with cta:
+    st.subheader("Crop-centre trajectory X(t)")
+    xs = [f["x_smooth"] for f in meta["frames"]]
+    xt = [f["x_target"] for f in meta["frames"]]
+    st.line_chart({"x_smooth (rendered)": xs, "x_target (raw backward pass)": xt})
+with ctb:
+    st.subheader("Per-frame quality score")
+    if scores:
+        st.line_chart({"quality": scores})
+        q = meta.get("quality", {})
+        st.caption(f'avg {avg_math*100:.1f}%  ·  object cov '
+                   f'{q.get("avg_object_coverage", 0)*100:.0f}%  ·  saliency cov '
+                   f'{q.get("avg_saliency_coverage", 0)*100:.0f}%')
+    else:
+        st.info("No frame_scores — reprocess this video with the current cropper.")
 
 # ---- output video ----
 st.subheader("Rendered 9:16 output")

@@ -11,3 +11,4 @@ matplotlib>=3.8           # heatmap colormaps for the dashboard
 # App / tooling
 streamlit>=1.30           # visualization dashboard
 gitpython>=3.1            # programmatic git operations
+google-genai>=0.3         # Gemini VLM crop-quality evaluation (optional; needs GEMINI_API_KEY)

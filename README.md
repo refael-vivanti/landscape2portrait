@@ -107,6 +107,47 @@ weights are reproducible artifacts and are git-ignored.
 
 ---
 
+## Evaluation & analytics
+
+Two complementary quality signals are produced per video.
+
+### 1. Mathematical quality score (per frame)
+
+For every frame `t`, `cropper.py` computes:
+
+- **Object coverage (70%)** — fraction of detected person/face box *area* that
+  falls inside the crop window (`1.0` when nothing is detected).
+- **Saliency coverage (30%)** — saliency mass inside the crop over the frame's
+  total saliency.
+- `Quality[t] = 0.7·object_coverage[t] + 0.3·saliency_coverage[t]`
+
+Saved to the JSON as `frame_scores` (1-D array, one per frame) plus a `quality`
+summary (`avg_score`, `avg_object_coverage`, `avg_saliency_coverage`). Object
+coverage is measured on the detected frames and interpolated between them
+(`--full` makes it exact per frame); saliency coverage uses the per-keyframe
+saliency profiles.
+
+### 2. AI (VLM) director score
+
+`evaluate.py` composes the 6 storyboard frames (with green crop overlays) into a
+grid and sends it to Google **Gemini** (`gemini-2.5-flash` by default), asking for
+a 1.0–5.0 rating of subject retention + temporal flow. The parsed
+`ai_score` / `ai_reasoning` are merged into the video's JSON.
+
+```bash
+pip install google-genai
+export GEMINI_API_KEY=...              # or GOOGLE_API_KEY
+# during batch:
+python batch.py --folder <videos> --ai-eval --ai-model gemini-2.5-flash
+# or standalone on one result:
+python evaluate.py --meta metadata/<video>.json
+```
+
+Without a key it degrades gracefully (`ai_score=null`, explanatory
+`ai_reasoning`) so the batch never breaks. The dashboard shows both the
+**Average Math Score** and **AI Director Score** as summary cards, the AI
+reasoning, and a per-frame quality chart.
+
 ## Setup
 
 ```bash

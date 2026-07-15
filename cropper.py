@@ -427,6 +427,50 @@ def process_video(path, out_root, alpha=DEFAULT_ALPHA, proc_width=DEFAULT_PROC_W
     x_target = np.interp(np.arange(n), keyframes, xk)
     x_smooth = ema_smooth(x_target, alpha, W, crop_w)
 
+    # ---- per-frame mathematical quality score ----
+    # Object coverage (0.7): fraction of detected person/face box area kept inside
+    # the crop (1.0 when nothing is detected). Saliency coverage (0.3): saliency
+    # mass inside the crop over total. Computed where signals exist, interpolated
+    # to every frame (exact per-frame with --full).
+    half = crop_w // 2
+
+    def crop_x0(c):
+        return int(np.clip(round(c - half), 0, W - crop_w))
+
+    def object_coverage(faces, people, c):
+        boxes = [b[:4] for b in faces] + [b[:4] for b in people]
+        if not boxes:
+            return 1.0
+        x0 = crop_x0(c); x1 = x0 + crop_w
+        num = den = 0.0
+        for (x, y, w, h) in boxes:
+            ov = max(0, min(x + w, x1) - max(x, x0))   # crop spans full height
+            num += h * ov
+            den += h * w
+        return num / den if den > 0 else 1.0
+
+    def saliency_coverage(profile, c):
+        tot = float(profile.sum())
+        if tot <= 0:
+            return 1.0
+        x0 = crop_x0(c)
+        return float(profile[x0:x0 + crop_w].sum() / tot)
+
+    obj_idx = sorted(dets.keys())
+    if obj_idx:
+        obj_vals = [object_coverage(dets[k][0], dets[k][1], x_smooth[k]) for k in obj_idx]
+        obj_cov = np.interp(np.arange(n), obj_idx, obj_vals)
+    else:
+        obj_cov = np.ones(n)
+
+    sal_profiles = {keyframes[j]: kf_sal[j] for j in range(len(keyframes))}
+    sal_profiles.update(sal_col_by_i)
+    sal_idx = sorted(sal_profiles.keys())
+    sal_vals = [saliency_coverage(sal_profiles[k], x_smooth[k]) for k in sal_idx]
+    sal_cov = np.interp(np.arange(n), sal_idx, sal_vals) if sal_idx else np.ones(n)
+
+    frame_scores = 0.7 * obj_cov + 0.3 * sal_cov
+
     # ---- render 9:16 output ----
     out_video_rel = None
     if render:
@@ -437,11 +481,10 @@ def process_video(path, out_root, alpha=DEFAULT_ALPHA, proc_width=DEFAULT_PROC_W
         out_video_rel = os.path.relpath(out_path, out_root)
 
     # ---- metadata JSON (detections present only where computed) ----
-    half = crop_w // 2
     frames_meta = []
     for t in range(n):
         c = float(x_smooth[t])
-        x0 = int(np.clip(round(c - half), 0, W - crop_w))
+        x0 = crop_x0(c)
         faces, people, stt = dets.get(t, ([], [], (0.0, 0.0)))
         frames_meta.append({
             "i": t,
@@ -454,6 +497,7 @@ def process_video(path, out_root, alpha=DEFAULT_ALPHA, proc_width=DEFAULT_PROC_W
             "people": people,
             "saliency": {"mean": round(stt[0], 4), "max": round(stt[1], 4)},
             "detected": t in dets,
+            "score": round(float(frame_scores[t]), 4),
         })
 
     meta = {
@@ -470,6 +514,12 @@ def process_video(path, out_root, alpha=DEFAULT_ALPHA, proc_width=DEFAULT_PROC_W
                    "model": os.path.basename(model_path)},
         "output_video": out_video_rel,
         "storyboard": storyboard,
+        "frame_scores": [round(float(s), 4) for s in frame_scores],
+        "quality": {
+            "avg_score": round(float(np.mean(frame_scores)), 4),
+            "avg_object_coverage": round(float(np.mean(obj_cov)), 4),
+            "avg_saliency_coverage": round(float(np.mean(sal_cov)), 4),
+        },
         "frames": frames_meta,
         "elapsed_sec": round(time.time() - t_start, 1),
     }

@@ -33,6 +33,9 @@ def main():
     ap.add_argument("--full", action="store_true", help="detect every frame (slow)")
     ap.add_argument("--model", default=os.path.join(ROOT, "models", "yolov8n.pt"))
     ap.add_argument("--force", action="store_true", help="reprocess even if JSON exists")
+    ap.add_argument("--ai-eval", action="store_true",
+                    help="run Gemini VLM evaluation after each video (needs GEMINI_API_KEY)")
+    ap.add_argument("--ai-model", default="gemini-2.5-flash")
     args = ap.parse_args()
 
     names = list_videos(args.folder)[args.skip:]
@@ -59,6 +62,11 @@ def main():
                           flow_stride=args.flow_stride,
                           detect_window=args.detect_window, anchor=args.anchor,
                           full=args.full, model_path=args.model)
+            if args.ai_eval:
+                from evaluate import evaluate_and_update
+                meta_path = os.path.join(meta_dir, stem + ".json")
+                s, r = evaluate_and_update(meta_path, args.out, model=args.ai_model)
+                print(f"[batch {k}/{total}] AI score={s}", flush=True)
             done += 1
         except Exception as e:
             print(f"[batch {k}/{total}] ERROR {name}: {e}", flush=True)
