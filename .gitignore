@@ -15,6 +15,10 @@ Thumbs.db
 models/*.pt
 *.pt
 
+# ---- Secrets ----
+.env
+*.key
+
 # ---- Runtime logs ----
 logs/
 
