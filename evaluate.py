@@ -62,7 +62,7 @@ FACE_COLOR = (255, 255, 0)    # cyan
 PERSON_COLOR = (0, 255, 255)  # yellow
 
 PROMPT = """You are an expert cinematic director assessing a smart-cropping algorithm (16:9 to 9:16).
-Analyze the attached 6-frame storyboard. The green boxes represent the algorithm's crop window.
+Analyze the attached storyboard (frames sampled evenly across the clip, left-to-right, top-to-bottom). The green boxes represent the algorithm's crop window.
 Rate the overall crop quality on a scale from 1.0 to 5.0. Focus on:
 1. Subject Retention: Are the key actors, faces, or objects of interest fully preserved inside the crop?
 2. Temporal Flow: Based on the green box positions, does the camera panning feel natural or abrupt?
@@ -74,9 +74,9 @@ Return your response STRICTLY as a JSON object with keys:
 }"""
 
 
-def build_storyboard_grid(meta, out_root, save_path, cols=3, tile=(480, 270),
+def build_storyboard_grid(meta, out_root, save_path, cols=5, tile=(384, 216),
                           draw_boxes=True):
-    """Compose the 6 storyboard frames (with green crop overlays) into one grid."""
+    """Compose the storyboard frames (with green crop overlays) into one grid."""
     frames_by_i = {f["i"]: f for f in meta["frames"]}
     tiles = []
     for s in meta.get("storyboard", []):
@@ -94,6 +94,10 @@ def build_storyboard_grid(meta, out_root, save_path, cols=3, tile=(480, 270),
         if "crop" in fm:
             x0, y0, x1, y1 = fm["crop"]
             cv2.rectangle(img, (x0, y0), (x1 - 1, y1 - 1), CROP_COLOR, 5)
+        if fm.get("foe_x") is not None:
+            fx = int(max(0, min(img.shape[1] - 1, round(fm["foe_x"]))))
+            cv2.drawMarker(img, (fx, img.shape[0] // 2), (255, 0, 255),
+                           cv2.MARKER_CROSS, 50, 4)
         cv2.putText(img, f't={s["t"]}s', (12, 42),
                     cv2.FONT_HERSHEY_SIMPLEX, 1.1, (255, 255, 255), 3)
         tiles.append(cv2.resize(img, tile))

@@ -52,14 +52,18 @@ import numpy as np
 # v3: fast pipeline — detect only on the trailing window + storyboard frames,
 #     optical flow at a stride with keyframe interpolation.
 # v4: saliency re-anchoring during the backward pass to correct flow drift.
-ALGO_VERSION = 4
+# v5: epipole (focus-of-expansion) tracking for forward motion + median-filter
+#     stability; 15-frame storyboard; landscape green-frame overlay render.
+ALGO_VERSION = 5
 
 DEFAULT_ALPHA = 0.15        # EMA weight on the raw target (lower = smoother)
 DEFAULT_PROC_WIDTH = 480    # width used for flow / saliency (speed vs accuracy)
 DEFAULT_FLOW_STRIDE = 5     # compute optical flow every k-th frame, interpolate between
 DEFAULT_ANCHOR = 0.5        # blend toward per-keyframe saliency to fight flow drift (0=pure flow)
 TERMINAL_WINDOW = 10        # number of trailing frames used for the terminal decision
-STORYBOARD_TIMES = [0, 3, 6, 9, 12, 15]   # seconds sampled for the storyboard
+STORYBOARD_COUNT = 15       # number of evenly-spaced storyboard frames
+FWD_MIN_FRAC = 0.5          # >= this fraction of keyframes showing a focus-of-expansion => forward motion
+MEDIAN_K = 5               # temporal median window (keyframes) for trajectory de-spiking
 PORTRAIT_AR = 9.0 / 16.0    # width / height of the output
 
 
@@ -273,6 +277,44 @@ def backward_propagate_kf(x_terminal, keyframes, gap_dx, W, crop_w,
     return xk
 
 
+def focus_of_expansion(col_dx, W):
+    """
+    Estimate the horizontal focus of expansion (epipole) from the column-averaged
+    horizontal optical flow of one keyframe gap.
+
+    Forward camera/drone motion makes the flow diverge: horizontal flow is
+    negative left of the heading and positive to its right. The FOE is the
+    neg->pos zero-crossing. Returns the FOE x (full-frame px) or None when the
+    divergence pattern is absent (i.e. the clip is not moving forward here).
+    """
+    if col_dx is None or len(col_dx) < 8:
+        return None
+    k = max(3, (W // 40) | 1)                       # odd smoothing window
+    u = np.convolve(col_dx, np.ones(k) / k, mode="same")
+    left = u[:int(W * 0.4)].mean()
+    right = u[int(W * 0.6):].mean()
+    if not (left < 0 < right):                       # require divergence
+        return None
+    zc = np.where((u[:-1] < 0) & (u[1:] >= 0))[0]
+    if len(zc) == 0:
+        return None
+    return float(zc[len(zc) // 2])
+
+
+def _median_filter(x, k):
+    """1-D temporal median filter (odd k); de-spikes the target trajectory."""
+    x = np.asarray(x, dtype=np.float64)
+    n = len(x)
+    if n < 3 or k < 3:
+        return x
+    k = min(k | 1, n if n % 2 else n - 1)
+    h = k // 2
+    out = np.empty(n)
+    for i in range(n):
+        out[i] = np.median(x[max(0, i - h):min(n, i + h + 1)])
+    return out
+
+
 def ema_smooth(x_target, alpha, W, crop_w):
     """Forward EMA + boundary clamp of the crop centre."""
     half = crop_w // 2
@@ -335,7 +377,12 @@ def process_video(path, out_root, alpha=DEFAULT_ALPHA, proc_width=DEFAULT_PROC_W
         col_full = np.interp(np.arange(W), xp, sal.sum(axis=0))
         return faces, people, sal, col_full, (float(sal.mean()), float(sal.max()))
 
-    story_targets = {int(round(s * fps)) for s in STORYBOARD_TIMES}
+    total_est = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+    if total_est > 1:
+        story_targets = {int(round(x))
+                         for x in np.linspace(0, total_est - 1, STORYBOARD_COUNT)}
+    else:
+        story_targets = set()   # unknown length; storyboard stays sparse
     story_dir = os.path.join(out_root, "frames", name)
     os.makedirs(story_dir, exist_ok=True)
     storyboard = []
@@ -415,17 +462,42 @@ def process_video(path, out_root, alpha=DEFAULT_ALPHA, proc_width=DEFAULT_PROC_W
             dets[idx] = (faces, people, stt)
             sal_col_by_i[idx] = col_full
 
+    # ---- focus-of-expansion (epipole) detection for forward-motion clips ----
+    gap_foe = [focus_of_expansion(dx, W) for dx in gap_dx]
+    valid_foe = [f for f in gap_foe if f is not None]
+    foe_fraction = len(valid_foe) / len(gap_foe) if gap_foe else 0.0
+    is_forward = foe_fraction >= FWD_MIN_FRAC and len(valid_foe) >= 2
+    kf_foe = [gap_foe[0] if gap_foe else None] + gap_foe   # aligned to keyframes
+
+    # ---- choose target trajectory: epipole WINS on forward motion ----
     w0 = max(0, n - detect_window)
     faces_win = [dets[k][0] for k in range(w0, n) if k in dets]
     people_win = [dets[k][1] for k in range(w0, n) if k in dets]
     sal_win = [sal_col_by_i[k] for k in range(w0, n) if k in sal_col_by_i]
-    x_terminal, source = decide_terminal_target(faces_win, people_win, sal_win, W, crop_w)
 
-    # ---- backward propagation across keyframes + interpolation + smoothing ----
-    xk = backward_propagate_kf(x_terminal, keyframes, gap_dx, W, crop_w,
-                               kf_sal=kf_sal, anchor=anchor)
+    if is_forward:
+        source = "epipole"
+        idx = [j for j, f in enumerate(kf_foe) if f is not None]
+        xk = np.interp(np.arange(len(keyframes)), idx, [kf_foe[j] for j in idx])
+        x_terminal = float(xk[-1])
+    else:
+        x_terminal, source = decide_terminal_target(
+            faces_win, people_win, sal_win, W, crop_w)
+        xk = backward_propagate_kf(x_terminal, keyframes, gap_dx, W, crop_w,
+                                   kf_sal=kf_sal, anchor=anchor)
+
+    # ---- de-spike (both paths) + interpolate + smooth ----
+    xk = _median_filter(xk, MEDIAN_K)
     x_target = np.interp(np.arange(n), keyframes, xk)
     x_smooth = ema_smooth(x_target, alpha, W, crop_w)
+
+    # per-frame focus of expansion (for the dashboard heading marker)
+    if valid_foe:
+        fidx = [keyframes[j] for j, f in enumerate(kf_foe) if f is not None]
+        foe_frame = np.interp(np.arange(n), fidx, [kf_foe[j] for j in range(len(kf_foe))
+                                                   if kf_foe[j] is not None])
+    else:
+        foe_frame = None
 
     # ---- per-frame mathematical quality score ----
     # Object coverage (0.7): fraction of detected person/face box area kept inside
@@ -471,14 +543,17 @@ def process_video(path, out_root, alpha=DEFAULT_ALPHA, proc_width=DEFAULT_PROC_W
 
     frame_scores = 0.7 * obj_cov + 0.3 * sal_cov
 
-    # ---- render 9:16 output ----
-    out_video_rel = None
+    # ---- render 9:16 portrait output + landscape green-frame overlay ----
+    out_video_rel = out_overlay_rel = None
     if render:
         out_dir = os.path.join(out_root, "outputs")
         os.makedirs(out_dir, exist_ok=True)
         out_path = os.path.join(out_dir, f"{name}_portrait.mp4")
         _render(path, out_path, x_smooth, crop_w, H, fps)
         out_video_rel = os.path.relpath(out_path, out_root)
+        ov_path = os.path.join(out_dir, f"{name}_overlay.mp4")
+        _render_overlay(path, ov_path, x_smooth, foe_frame, crop_w, W, H, fps)
+        out_overlay_rel = os.path.relpath(ov_path, out_root)
 
     # ---- metadata JSON (detections present only where computed) ----
     frames_meta = []
@@ -498,6 +573,7 @@ def process_video(path, out_root, alpha=DEFAULT_ALPHA, proc_width=DEFAULT_PROC_W
             "saliency": {"mean": round(stt[0], 4), "max": round(stt[1], 4)},
             "detected": t in dets,
             "score": round(float(frame_scores[t]), 4),
+            "foe_x": (round(float(foe_frame[t]), 1) if foe_frame is not None else None),
         })
 
     meta = {
@@ -508,11 +584,16 @@ def process_video(path, out_root, alpha=DEFAULT_ALPHA, proc_width=DEFAULT_PROC_W
         "crop_width": crop_w, "crop_height": H, "aspect": "9:16",
         "terminal": {"source": source, "x_target": int(x_terminal),
                      "window": min(detect_window, n)},
+        "motion": {"forward": bool(is_forward),
+                   "foe_fraction": round(foe_fraction, 3),
+                   "foe_mean_x": (round(float(np.mean(valid_foe)), 1)
+                                  if valid_foe else None)},
         "params": {"alpha": alpha, "proc_width": proc_width,
                    "flow_stride": flow_stride, "detect_window": detect_window,
                    "anchor": anchor, "full": full,
                    "model": os.path.basename(model_path)},
         "output_video": out_video_rel,
+        "output_overlay": out_overlay_rel,
         "storyboard": storyboard,
         "frame_scores": [round(float(s), 4) for s in frame_scores],
         "quality": {
@@ -561,6 +642,48 @@ def _render(src_path, out_path, x_smooth, crop_w, H, fps):
         c = x_smooth[min(t, len(x_smooth) - 1)]
         x0 = int(np.clip(round(c - half), 0, W - crop_w))
         writer.write(frame[:, x0:x0 + crop_w])
+        t += 1
+    writer.release()
+    cap.release()
+
+    if ffmpeg:
+        subprocess.run(
+            [ffmpeg, "-y", "-loglevel", "error", "-i", tmp,
+             "-c:v", "libx264", "-pix_fmt", "yuv420p",
+             "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+             "-movflags", "+faststart", out_path],
+            check=True,
+        )
+        os.remove(tmp)
+
+
+def _render_overlay(src_path, out_path, x_smooth, foe_frame, crop_w, W, H, fps):
+    """Write the ORIGINAL 16:9 video with the moving green crop rectangle drawn on
+    each frame (and a heading marker where the epipole is known). Lets the viewer
+    see what is kept vs discarded over time. H.264, same transcode as _render."""
+    import shutil
+    import subprocess
+
+    ffmpeg = shutil.which("ffmpeg")
+    cap = cv2.VideoCapture(src_path)
+    tmp = out_path + ".tmp.mp4" if ffmpeg else out_path
+    fourcc = cv2.VideoWriter_fourcc(*("mp4v" if ffmpeg else "avc1"))
+    writer = cv2.VideoWriter(tmp, fourcc, fps, (W, H))
+    half = crop_w // 2
+    t = 0
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            break
+        c = x_smooth[min(t, len(x_smooth) - 1)]
+        x0 = int(np.clip(round(c - half), 0, W - crop_w))
+        cv2.rectangle(frame, (x0, 0), (x0 + crop_w - 1, H - 1), (0, 255, 0), 4)
+        if foe_frame is not None:
+            fx = int(np.clip(round(foe_frame[min(t, len(foe_frame) - 1)]), 0, W - 1))
+            cy = H // 2                                   # heading crosshair (magenta)
+            cv2.drawMarker(frame, (fx, cy), (255, 0, 255),
+                           cv2.MARKER_CROSS, 40, 3)
+        writer.write(frame)
         t += 1
     writer.release()
     cap.release()

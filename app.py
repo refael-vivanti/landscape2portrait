@@ -4,12 +4,13 @@ app.py — Streamlit visualization dashboard for the smart cropper.
 Reads the JSON metadata produced by cropper.py (metadata/*.json) plus the cached
 storyboard frames (frames/<video>/). For each video it renders:
 
-  * a storyboard matrix of 6 frames (0,3,6,9,12,15s) with:
+  * a storyboard strip of 15 frames across the clip with:
       - green rectangle = final 9:16 crop window (x_smooth)
       - bounding boxes + labels for faces (cyan) and people (yellow)
       - red saliency heatmap overlay
+      - magenta crosshair = epipole / heading (forward-motion clips)
   * an interactive frame-by-frame inspector (slider) that scrubs the whole clip
-  * the rendered 9:16 output video
+  * the original 16:9 video with the moving green crop frame (+ portrait output)
 
 Run:
     streamlit run app.py
@@ -28,6 +29,7 @@ META_DIR = os.path.join(ROOT, "metadata")
 FACE_COLOR = (255, 255, 0)     # cyan (BGR)
 PERSON_COLOR = (0, 255, 255)   # yellow (BGR)
 CROP_COLOR = (0, 255, 0)       # green (BGR)
+FOE_COLOR = (255, 0, 255)      # magenta (BGR) — epipole / heading
 
 
 # --------------------------------------------------------------------------- #
@@ -90,6 +92,11 @@ def draw_overlays(img, fmeta, draw_sal_path=None, label=True):
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, PERSON_COLOR, 2)
     x0, y0, x1, y1 = fmeta["crop"]
     cv2.rectangle(img, (x0, y0), (x1 - 1, y1 - 1), CROP_COLOR, 4)
+    foe = fmeta.get("foe_x")
+    if foe is not None:
+        fx = int(max(0, min(img.shape[1] - 1, round(foe))))
+        cv2.drawMarker(img, (fx, img.shape[0] // 2), FOE_COLOR,
+                       cv2.MARKER_CROSS, max(24, img.shape[0] // 12), 3)
     return img
 
 
@@ -110,7 +117,7 @@ if not index:
                "Run `python cropper.py --folder <videos> --limit 5` first.")
     st.stop()
 
-CURRENT_ALGO = 4   # keep in sync with cropper.ALGO_VERSION
+CURRENT_ALGO = 5   # keep in sync with cropper.ALGO_VERSION
 
 names = list(index.keys())
 st.sidebar.header("Videos")
@@ -125,11 +132,9 @@ meta = index[choice]
 
 ver = meta.get("algo_version", 1)
 if ver >= CURRENT_ALGO:
-    st.success(f"✅ Algorithm v{ver} (current — includes the false-positive / "
-               "centering fixes).")
+    st.success(f"✅ Algorithm v{ver} (current — epipole tracking + stability).")
 else:
-    st.warning(f"⚠️ Algorithm v{ver} (OLD result — predates the fixes). "
-               "Re-run the cropper on this video to update it.")
+    st.warning(f"⚠️ Algorithm v{ver} (OLDER result — reprocess to update).")
 
 # ---- evaluation summary cards (prominent) ----
 scores = meta.get("frame_scores", [])
@@ -143,36 +148,39 @@ e1.metric("📐 Average Math Score",
                "0.3·saliency-coverage inside the crop window.")
 e2.metric("🤖 AI Director Score",
           f"{ai_score:.1f} / 5.0" if isinstance(ai_score, (int, float)) else "—",
-          help="Gemini VLM rating of the 6-frame storyboard (subject retention "
-               "+ temporal flow). Run the batch with --ai-eval to populate.")
+          help="VLM rating of the storyboard (subject retention + temporal "
+               "flow). Run the batch with --ai-eval to populate.")
 if meta.get("ai_reasoning"):
     (st.info if isinstance(ai_score, (int, float)) else st.caption)(
         f'**AI reasoning:** {meta["ai_reasoning"]}')
 
 # ---- technical summary ----
+fwd = meta.get("motion", {}).get("forward")
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Resolution", f'{meta["width"]}×{meta["height"]}')
 c2.metric("Frames", meta["n_frames"])
 c3.metric("Crop width", meta["crop_width"])
-c4.metric("Terminal target", meta["terminal"]["source"])
+c4.metric("Target", meta["terminal"]["source"] + (" ✈️" if fwd else ""))
 
-# ---- storyboard ----
-st.subheader("Storyboard (0, 3, 6, 9, 12, 15 s)")
-st.caption("🟩 crop window · 🟦 faces · 🟨 people · 🔴 saliency heatmap")
+# ---- storyboard (15 frames across the clip, single row) ----
+st.subheader("Storyboard — 15 frames across the clip"
+             + ("  ✈️ forward motion (epipole tracked)" if fwd else ""))
+st.caption("🟩 crop · 🟦 faces · 🟨 people · 🔴 saliency"
+           + ("  · ✚ heading (epipole)" if fwd else ""))
 
 story = meta.get("storyboard", [])
-cols = st.columns(3)
-for k, s in enumerate(story):
-    fpath = os.path.join(ROOT, s["frame"])
-    spath = os.path.join(ROOT, s["saliency"])
-    if not os.path.exists(fpath):
-        cols[k % 3].info(f"t={s['t']}s frame missing")
-        continue
-    img = cv2.imread(fpath)
-    fmeta = frame_by_index(meta, s["i"])
-    img = draw_overlays(img, fmeta, draw_sal_path=spath)
-    cols[k % 3].image(to_rgb(img), caption=f't = {s["t"]} s  (frame {s["i"]})',
-                      use_container_width=True)
+if story:
+    cols = st.columns(len(story))
+    for k, s in enumerate(story):
+        fpath = os.path.join(ROOT, s["frame"])
+        spath = os.path.join(ROOT, s["saliency"])
+        if not os.path.exists(fpath):
+            cols[k].caption(f"{s['t']}s —")
+            continue
+        img = cv2.imread(fpath)
+        fmeta = frame_by_index(meta, s["i"])
+        img = draw_overlays(img, fmeta, draw_sal_path=spath, label=False)
+        cols[k].image(to_rgb(img), caption=f'{s["t"]}s', use_container_width=True)
 
 # ---- interactive inspector ----
 st.subheader("Frame-by-frame inspector")
@@ -202,7 +210,8 @@ right.write({
     "t (s)": fmeta["t"],
     "x_smooth": fmeta["x_smooth"],
     "x_target (raw)": fmeta["x_target"],
-    "flow dx": fmeta["dx"],
+    "epipole x": fmeta.get("foe_x"),
+    "forward motion": bool(meta.get("motion", {}).get("forward")),
     "faces": len(fmeta.get("faces", [])),
     "people": len(fmeta.get("people", [])),
     "saliency mean": fmeta["saliency"]["mean"],
@@ -226,13 +235,21 @@ with ctb:
     else:
         st.info("No frame_scores — reprocess this video with the current cropper.")
 
-# ---- output video ----
-st.subheader("Rendered 9:16 output")
+# ---- output: landscape with moving green crop frame (main) + portrait ----
+st.subheader("Rendered output")
+ov = meta.get("output_overlay")
+ov_path = os.path.join(ROOT, ov) if ov else None
+if ov_path and os.path.exists(ov_path):
+    st.caption("Original 16:9 with the moving green crop frame 🟩"
+               + (" and heading marker ✚" if fwd else "")
+               + " — shows what is kept vs discarded.")
+    st.video(ov_path)
+else:
+    st.info("Landscape overlay not found — reprocess with the current cropper.")
+
 out = meta.get("output_video")
 out_path = os.path.join(ROOT, out) if out else None
 if out_path and os.path.exists(out_path):
-    # portrait video at full width is huge — pin it to a narrow column so it fits
-    vcol, _ = st.columns([1, 4])
-    vcol.video(out_path)
-else:
-    st.info("Rendered video not found (run cropper without --no-render).")
+    with st.expander("▶ 9:16 portrait output (the actual conversion)"):
+        vcol, _ = st.columns([1, 4])
+        vcol.video(out_path)
