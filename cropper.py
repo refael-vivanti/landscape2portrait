@@ -315,6 +315,43 @@ def _median_filter(x, k):
     return out
 
 
+def stability_grade(x_smooth, W, fps):
+    """
+    Grade how steady the crop trajectory is (A best .. F worst). Penalises the
+    'crop jumps sides' behaviour: large-amplitude direction reversals (swings
+    across the frame), plus overall pan busyness. A slow single pan scores well;
+    repeated full-frame oscillation scores badly.
+    Returns {score 0-100, grade, big_swings, swing_rate, travel_per_sec, range_frac}.
+    """
+    xs = np.asarray(x_smooth, dtype=np.float64)
+    n = len(xs)
+    dur = max(1e-6, n / (fps or 30.0))
+    if n < 3 or W <= 0:
+        return {"score": 100, "grade": "A", "big_swings": 0,
+                "swing_rate": 0.0, "travel_per_sec": 0.0, "range_frac": 0.0}
+    d = np.diff(xs)
+    travel_ps = (np.abs(d).sum() / W) / dur          # frame-widths panned / sec
+    rng = (xs.max() - xs.min()) / W
+    # amplitude between successive turning points -> count "big" reversals
+    ext = [xs[0]]
+    for i in range(1, n - 1):
+        if (xs[i] - xs[i - 1]) * (xs[i + 1] - xs[i]) < 0:
+            ext.append(xs[i])
+    ext.append(xs[-1])
+    amps = np.abs(np.diff(np.asarray(ext))) / W if len(ext) > 1 else np.array([0.0])
+    big = int((amps > 0.25).sum())
+    swing_rate = big / dur
+    swing_pen = min(1.0, swing_rate / 0.20)          # >=0.2 big swings/sec = maxed
+    travel_pen = min(1.0, travel_ps / 0.25)
+    instability = 0.75 * swing_pen + 0.25 * travel_pen
+    score = int(round(100 * (1 - instability)))
+    grade = ("A" if score >= 85 else "B" if score >= 70 else
+             "C" if score >= 55 else "D" if score >= 40 else "F")
+    return {"score": score, "grade": grade, "big_swings": big,
+            "swing_rate": round(swing_rate, 3),
+            "travel_per_sec": round(travel_ps, 3), "range_frac": round(rng, 3)}
+
+
 def ema_smooth(x_target, alpha, W, crop_w):
     """Forward EMA + boundary clamp of the crop centre."""
     half = crop_w // 2
@@ -601,6 +638,7 @@ def process_video(path, out_root, alpha=DEFAULT_ALPHA, proc_width=DEFAULT_PROC_W
             "avg_object_coverage": round(float(np.mean(obj_cov)), 4),
             "avg_saliency_coverage": round(float(np.mean(sal_cov)), 4),
         },
+        "stability": stability_grade(x_smooth, W, fps),
         "frames": frames_meta,
         "elapsed_sec": round(time.time() - t_start, 1),
     }

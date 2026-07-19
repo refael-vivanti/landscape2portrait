@@ -131,10 +131,18 @@ names = list(index.keys())
 st.sidebar.header("Videos")
 n_new = sum(1 for m in index.values() if m.get("algo_version", 1) >= CURRENT_ALGO)
 st.sidebar.caption(f"{len(names)} processed · {n_new} on current algo (v{CURRENT_ALGO})")
-# mark each entry in the sidebar list so old results are obvious
-labels = {n: f'{"✅" if index[n].get("algo_version",1) >= CURRENT_ALGO else "⚠️"} {n}'
-          for n in names}
-choice = st.sidebar.radio("Select", names, format_func=lambda n: labels[n],
+# mark each entry: algo freshness (✅/⚠️) + stability grade colour dot
+_GDOT = {"A": "🟢", "B": "🟢", "C": "🟡", "D": "🟠", "F": "🔴"}
+
+
+def _sidebar_label(n):
+    m = index[n]
+    fresh = "✅" if m.get("algo_version", 1) >= CURRENT_ALGO else "⚠️"
+    dot = _GDOT.get(m.get("stability", {}).get("grade"), "")
+    return f"{fresh}{dot} {n}"
+
+
+choice = st.sidebar.radio("Select", names, format_func=_sidebar_label,
                           label_visibility="collapsed")
 meta = index[choice]
 
@@ -149,7 +157,11 @@ scores = meta.get("frame_scores", [])
 avg_math = (sum(scores) / len(scores)) if scores else None
 ai_score = meta.get("ai_score")
 
-e1, e2 = st.columns(2)
+stab = meta.get("stability", {})
+grade = stab.get("grade")
+gcolor = {"A": "🟢", "B": "🟢", "C": "🟡", "D": "🟠", "F": "🔴"}.get(grade, "")
+
+e1, e2, e3 = st.columns(3)
 e1.metric("📐 Average Math Score",
           f"{avg_math * 100:.1f}%" if avg_math is not None else "—",
           help="Mean of the per-frame quality score: 0.7·object-coverage + "
@@ -158,6 +170,12 @@ e2.metric("🤖 AI Director Score",
           f"{ai_score:.1f} / 5.0" if isinstance(ai_score, (int, float)) else "—",
           help="VLM rating of the storyboard (subject retention + temporal "
                "flow). Run the batch with --ai-eval to populate.")
+e3.metric("📈 Stability grade",
+          f"{gcolor} {grade}" if grade else "—",
+          help="Camera-work steadiness (A best … F worst) from the crop "
+               "trajectory: penalises large side-to-side swings + pan busyness.")
+if grade:
+    e3.caption(f"{stab.get('score')}/100 · {stab.get('big_swings')} big swings")
 if meta.get("ai_reasoning"):
     (st.info if isinstance(ai_score, (int, float)) else st.caption)(
         f'**AI reasoning:** {meta["ai_reasoning"]}')
@@ -232,6 +250,10 @@ right.write({
 cta, ctb = st.columns(2)
 with cta:
     st.subheader("Crop-centre trajectory X(t)")
+    if grade:
+        st.caption(f"Stability {gcolor} **{grade}** ({stab.get('score')}/100) · "
+                   f"{stab.get('big_swings')} big side-swings · "
+                   f"{stab.get('travel_per_sec')} frame-widths panned/s")
     xs = [f["x_smooth"] for f in meta["frames"]]
     xt = [f["x_target"] for f in meta["frames"]]
     st.line_chart({"x_smooth (rendered)": xs, "x_target (raw backward pass)": xt})
