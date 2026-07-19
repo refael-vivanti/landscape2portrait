@@ -18,13 +18,24 @@ Run:
 
 import json
 import os
+from collections import Counter
 
 import cv2
 import numpy as np
+import pandas as pd
 import streamlit as st
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 META_DIR = os.path.join(ROOT, "metadata")
+HIST_PATH = os.path.join(ROOT, "history", "versions.json")
+
+
+def load_history():
+    try:
+        with open(HIST_PATH) as fh:
+            return json.load(fh)
+    except Exception:
+        return None
 
 FACE_COLOR = (255, 255, 0)     # cyan (BGR)
 PERSON_COLOR = (0, 255, 255)   # yellow (BGR)
@@ -106,6 +117,105 @@ def to_rgb(img):
 
 
 # --------------------------------------------------------------------------- #
+# Overview page
+# --------------------------------------------------------------------------- #
+
+def render_overview(index, history, current_algo):
+    st.header("📊 Overview — all videos")
+
+    # ---- current-version aggregate stats ----
+    maths, stabs, grades, ais = [], [], [], []
+    for m in index.values():
+        q = m.get("quality", {}).get("avg_score")
+        if q is not None:
+            maths.append(q * 100)
+        s = m.get("stability", {})
+        if s.get("score") is not None:
+            stabs.append(s["score"]); grades.append(s.get("grade"))
+        ai = m.get("ai_score")
+        if isinstance(ai, (int, float)):
+            ais.append(ai)
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Videos", len(index))
+    c2.metric("Mean math score", f"{np.mean(maths):.1f}%" if maths else "—")
+    c3.metric("Mean stability", f"{np.mean(stabs):.0f}/100" if stabs else "—")
+    c4.metric("Mean AI score",
+              f"{np.mean(ais):.2f}" if ais else "—",
+              help=f"{len(ais)} of {len(index)} scored")
+    gc = Counter(grades)
+    st.caption("Stability grade counts — "
+               + " · ".join(f"**{g}**: {gc.get(g, 0)}" for g in "ABCDF"))
+
+    # ---- version comparison ----
+    if history and history.get("versions"):
+        vers, data, vids = history["versions"], history["data"], history["videos"]
+
+        rows = []
+        for ver in vers:
+            d = data.get(ver, {})
+            st_ = [d[v]["stability"] for v in vids if v in d and d[v].get("stability") is not None]
+            ma_ = [d[v]["math"] for v in vids if v in d and d[v].get("math") is not None]
+            ai_ = [d[v]["ai"] for v in vids if v in d and d[v].get("ai") is not None]
+            gc2 = Counter(d[v]["grade"] for v in vids if v in d)
+            rows.append({"version": ver,
+                         "mean math %": round(np.mean(ma_), 1) if ma_ else None,
+                         "mean stability": round(np.mean(st_), 1) if st_ else None,
+                         "A": gc2.get("A", 0), "B": gc2.get("B", 0), "C": gc2.get("C", 0),
+                         "D": gc2.get("D", 0), "F": gc2.get("F", 0),
+                         "mean AI": round(np.mean(ai_), 2) if ai_ else None})
+        st.subheader("Version comparison — means across all videos")
+        st.dataframe(pd.DataFrame(rows).set_index("version"), use_container_width=True)
+
+        st.subheader("Per-video comparison across versions")
+        st.caption("Each line is one version across all videos (x = video index). "
+                   "Lines moving up = improvement; a version dipping below the others "
+                   "at some x = a per-video regression there.")
+        for metric, label in [("stability", "Stability score (0–100)"),
+                              ("math", "Math score (%)")]:
+            df = pd.DataFrame(
+                {ver: [data[ver].get(v, {}).get(metric) for v in vids] for ver in vers},
+                index=range(len(vids)))
+            st.markdown(f"**{label}**")
+            st.line_chart(df)
+
+        # ---- biggest per-video changes between the last two versions ----
+        if len(vers) >= 2:
+            a, b = vers[-2], vers[-1]
+            deltas = []
+            for v in vids:
+                if v in data[a] and v in data[b]:
+                    da, db = data[a][v].get("stability"), data[b][v].get("stability")
+                    if da is not None and db is not None:
+                        deltas.append({"video": v, f"{a}": da, f"{b}": db, "Δ": db - da})
+            dd = pd.DataFrame(deltas).sort_values("Δ")
+            st.subheader(f"Biggest stability changes  {a} → {b}")
+            lc, rc = st.columns(2)
+            lc.caption("⬇️ Regressions")
+            lc.dataframe(dd.head(8).set_index("video"), use_container_width=True)
+            rc.caption("⬆️ Improvements")
+            rc.dataframe(dd.tail(8).iloc[::-1].set_index("video"), use_container_width=True)
+    else:
+        st.info("No history/versions.json — run `python build_history.py` to enable "
+                "version comparison.")
+
+    # ---- full current grades table ----
+    st.subheader(f"All videos — current (v{current_algo})")
+    trows = []
+    for name, m in index.items():
+        s = m.get("stability", {}); q = m.get("quality", {}).get("avg_score")
+        ai = m.get("ai_score")
+        trows.append({"video": name, "grade": s.get("grade"),
+                      "stability": s.get("score"),
+                      "math %": round(q * 100, 1) if q is not None else None,
+                      "AI": ai if isinstance(ai, (int, float)) else None,
+                      "source": m.get("terminal", {}).get("source"),
+                      "forward": m.get("motion", {}).get("forward"),
+                      "big swings": s.get("big_swings")})
+    st.dataframe(pd.DataFrame(trows).set_index("video"),
+                 use_container_width=True, height=520)
+
+
+# --------------------------------------------------------------------------- #
 # UI
 # --------------------------------------------------------------------------- #
 
@@ -126,6 +236,7 @@ if not index:
     st.stop()
 
 CURRENT_ALGO = 5   # keep in sync with cropper.ALGO_VERSION
+OVERVIEW = "📊 Overview"
 
 names = list(index.keys())
 st.sidebar.header("Videos")
@@ -136,14 +247,21 @@ _GDOT = {"A": "🟢", "B": "🟢", "C": "🟡", "D": "🟠", "F": "🔴"}
 
 
 def _sidebar_label(n):
+    if n == OVERVIEW:
+        return OVERVIEW
     m = index[n]
     fresh = "✅" if m.get("algo_version", 1) >= CURRENT_ALGO else "⚠️"
     dot = _GDOT.get(m.get("stability", {}).get("grade"), "")
     return f"{fresh}{dot} {n}"
 
 
-choice = st.sidebar.radio("Select", names, format_func=_sidebar_label,
+choice = st.sidebar.radio("Select", [OVERVIEW] + names, format_func=_sidebar_label,
                           label_visibility="collapsed")
+
+if choice == OVERVIEW:
+    render_overview(index, load_history(), CURRENT_ALGO)
+    st.stop()
+
 meta = index[choice]
 
 ver = meta.get("algo_version", 1)
