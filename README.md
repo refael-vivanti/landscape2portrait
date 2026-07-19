@@ -107,6 +107,29 @@ weights are reproducible artifacts and are git-ignored.
 
 ---
 
+## Epipole / heading tracking & stability (v5)
+
+For **forward camera motion** (e.g. a drone flying down a road) the optical flow
+diverges from the *focus of expansion* (FOE / epipole) — the point we're heading
+toward. `focus_of_expansion()` finds it for free from the per-keyframe
+column-averaged flow (the neg→pos zero-crossing of a diverging field). When an
+FOE is present in ≥50% of keyframes the clip is flagged `motion.forward` and the
+crop **tracks the epipole**, so the viewer always sees where the camera is going.
+
+Priority: **epipole wins on forward motion** (`if forward → epipole; elif faces;
+elif people; else saliency`). Note the trade-off: a *subject* moving away from a
+follow-camera can also read as forward motion, so on such clips the crop follows
+the heading rather than the subject (configurable in `decide`-branch logic).
+
+A temporal **median filter** (`_median_filter`) de-spikes the per-keyframe
+trajectory on both paths before the EMA, removing single-keyframe jumps
+(measured: `10398657` max jitter 46→7 px/frame, direction reversals 38→18).
+
+**Visualization:** the storyboard is 15 evenly-spaced frames shown in one row,
+and the dashboard's main player is the **original 16:9 with the moving green crop
+frame** (+ a magenta heading marker on forward clips) so you can see what is kept
+vs discarded; the 9:16 portrait output is in a secondary expander.
+
 ## Evaluation & analytics
 
 Two complementary quality signals are produced per video.
