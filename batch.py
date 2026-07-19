@@ -14,7 +14,7 @@ import os
 import time
 
 from cropper import DEFAULT_ALPHA, DEFAULT_PROC_WIDTH, DEFAULT_FLOW_STRIDE, \
-    DEFAULT_ANCHOR, TERMINAL_WINDOW, list_videos, process_video
+    DEFAULT_ANCHOR, DEFAULT_MOTION_WEIGHT, TERMINAL_WINDOW, list_videos, process_video
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 
@@ -33,6 +33,7 @@ def main():
     ap.add_argument("--flow-stride", type=int, default=DEFAULT_FLOW_STRIDE)
     ap.add_argument("--detect-window", type=int, default=TERMINAL_WINDOW)
     ap.add_argument("--anchor", type=float, default=DEFAULT_ANCHOR)
+    ap.add_argument("--motion-weight", type=float, default=DEFAULT_MOTION_WEIGHT)
     ap.add_argument("--full", action="store_true", help="detect every frame (slow)")
     ap.add_argument("--model", default=os.path.join(ROOT, "models", "yolov8n.pt"))
     ap.add_argument("--force", action="store_true", help="reprocess even if JSON exists")
@@ -83,6 +84,7 @@ def main():
                           alpha=args.alpha, proc_width=args.proc_width,
                           flow_stride=args.flow_stride,
                           detect_window=args.detect_window, anchor=args.anchor,
+                          motion_weight=args.motion_weight,
                           full=args.full, model_path=args.model)
             if args.ai_eval:
                 from evaluate import evaluate_and_update

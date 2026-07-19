@@ -54,8 +54,11 @@ import numpy as np
 # v4: saliency re-anchoring during the backward pass to correct flow drift.
 # v5: epipole (focus-of-expansion) tracking for forward motion + median-filter
 #     stability; 15-frame storyboard; landscape green-frame overlay render.
-ALGO_VERSION = 5
+# v6: motion saliency blended into the saliency signal; weak/partial person
+#     detections fall through to it (so the crop can follow the moving action).
+ALGO_VERSION = 6
 
+DEFAULT_MOTION_WEIGHT = 0.5  # blend: saliency = w*motion + (1-w)*static (0 = static only)
 DEFAULT_ALPHA = 0.15        # EMA weight on the raw target (lower = smoother)
 DEFAULT_PROC_WIDTH = 480    # width used for flow / saliency (speed vs accuracy)
 DEFAULT_FLOW_STRIDE = 5     # compute optical flow every k-th frame, interpolate between
@@ -163,12 +166,24 @@ def saliency_map(gray):
 
 def flow_column_dx(prev_gray, cur_gray):
     """Column-averaged horizontal displacement (prev -> cur), length = width."""
+    return flow_columns(prev_gray, cur_gray)[0]
+
+
+def flow_columns(prev_gray, cur_gray):
+    """One Farneback pass -> (dx_col, motion_col) per column.
+
+    dx_col     : column-averaged *signed* horizontal flow (for epipole/backprop).
+    motion_col : column-averaged flow *magnitude* sqrt(u^2+v^2) -> motion saliency
+                 (high where things move, e.g. reaching hands over a static table).
+    """
     flow = cv2.calcOpticalFlowFarneback(
         prev_gray, cur_gray, None,
         pyr_scale=0.5, levels=3, winsize=15,
         iterations=3, poly_n=5, poly_sigma=1.2, flags=0,
     )
-    return flow[..., 0].mean(axis=0)  # mean over rows -> per-column dx
+    dx = flow[..., 0].mean(axis=0)
+    mag = np.sqrt(flow[..., 0] ** 2 + flow[..., 1] ** 2).mean(axis=0)
+    return dx, mag
 
 
 # --------------------------------------------------------------------------- #
@@ -207,15 +222,33 @@ def _boxes_profile(boxes_per_frame, W):
     return prof
 
 
-def decide_terminal_target(faces_pf, people_pf, sal_cols, W, crop_w, min_frac=0.3):
+def _people_weak(people_pf, W, H, conf_thr=0.5):
+    """True when person detections are unreliable — low YOLO confidence OR mostly
+    small/edge-touching boxes (an arm/hand reaching in, not a full body). Such
+    clips fall through to the (motion-blended) saliency instead of tracking a box."""
+    boxes = [b for pf in people_pf for b in pf]
+    if not boxes:
+        return True
+    confs = [b[4] for b in boxes if len(b) > 4]
+    mean_conf = float(np.mean(confs)) if confs else 0.0
+
+    def partial(b):
+        x, y, w, h = b[:4]
+        return x <= 2 or (x + w) >= W - 2 or y <= 2 or (y + h) >= H - 2
+    frac_partial = float(np.mean([partial(b) for b in boxes]))
+    return mean_conf < conf_thr or frac_partial > 0.5
+
+
+def decide_terminal_target(faces_pf, people_pf, sal_cols, W, crop_w, H=10 ** 9,
+                           min_frac=0.3):
     """
     Pick X_target for the terminal frame from the last TERMINAL_WINDOW frames.
-    Strict hierarchy: faces > people > saliency.
+    Hierarchy: faces > people (if not weak) > saliency (motion-blended).
 
     A detector only "wins" if it fires in at least ``min_frac`` of the trailing
-    frames, so a single-frame false positive (common with Haar cascades on
-    high-contrast textures) does not hijack the decision away from saliency.
-    Returns (x_target, source).
+    frames (rejects single-frame false positives), and people additionally must
+    not be "weak" (see _people_weak) — otherwise the crop follows the moving,
+    salient action instead of a flimsy person box. Returns (x_target, source).
     """
     n = max(1, len(sal_cols))
     need = max(1, int(round(min_frac * n)))
@@ -224,7 +257,7 @@ def decide_terminal_target(faces_pf, people_pf, sal_cols, W, crop_w, min_frac=0.
 
     if face_hits >= need:
         return _window_argmax(_boxes_profile(faces_pf, W), crop_w), "faces"
-    if people_hits >= need:
+    if people_hits >= need and not _people_weak(people_pf, W, H):
         return _window_argmax(_boxes_profile(people_pf, W), crop_w), "people"
     prof = np.sum(np.asarray(sal_cols), axis=0)
     return _window_argmax(prof, crop_w), "saliency"
@@ -369,8 +402,8 @@ def ema_smooth(x_target, alpha, W, crop_w):
 
 def process_video(path, out_root, alpha=DEFAULT_ALPHA, proc_width=DEFAULT_PROC_WIDTH,
                   flow_stride=DEFAULT_FLOW_STRIDE, detect_window=TERMINAL_WINDOW,
-                  anchor=DEFAULT_ANCHOR, model_path="yolov8n.pt", render=True,
-                  verbose=True, full=False):
+                  anchor=DEFAULT_ANCHOR, motion_weight=DEFAULT_MOTION_WEIGHT,
+                  model_path="yolov8n.pt", render=True, verbose=True, full=False):
     """
     Fast pipeline:
       * heavy detectors (YOLO person + Haar face + saliency) run ONLY on the
@@ -429,7 +462,7 @@ def process_video(path, out_root, alpha=DEFAULT_ALPHA, proc_width=DEFAULT_PROC_W
 
     dets = {}                          # frame index -> (faces, people, (sal_mean, sal_max))
     sal_col_by_i = {}                  # frame index -> saliency column profile (len W)
-    keyframes, gap_dx, kf_sal = [], [], []   # flow indices + per-gap dx + per-keyframe saliency
+    keyframes, gap_dx, gap_motion, kf_sal = [], [], [], []
     prev_kf_small, prev_kf_idx = None, None
     last_small, last_idx = None, None
     ring = deque(maxlen=detect_window)  # trailing (idx, frame, gray, small)
@@ -442,15 +475,16 @@ def process_video(path, out_root, alpha=DEFAULT_ALPHA, proc_width=DEFAULT_PROC_W
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         small = cv2.resize(gray, (proc_width, proc_h))
 
-        # ---- optical flow + saliency at keyframes ----
+        # ---- optical flow (dx + motion) + saliency at keyframes ----
         if prev_kf_small is None:
             keyframes.append(i)                     # first keyframe, no preceding gap
             kf_sal.append(sal_col(small))
             prev_kf_small, prev_kf_idx = small, i
         elif i - prev_kf_idx >= flow_stride:
-            dx = np.interp(np.arange(W), xp, flow_column_dx(prev_kf_small, small)) * scale
+            dxc, magc = flow_columns(prev_kf_small, small)
+            gap_dx.append(np.interp(np.arange(W), xp, dxc) * scale)
+            gap_motion.append(np.interp(np.arange(W), xp, magc))
             keyframes.append(i)
-            gap_dx.append(dx)
             kf_sal.append(sal_col(small))
             prev_kf_small, prev_kf_idx = small, i
         last_small, last_idx = small, i
@@ -483,14 +517,27 @@ def process_video(path, out_root, alpha=DEFAULT_ALPHA, proc_width=DEFAULT_PROC_W
 
     # close the final flow gap so the last frame is a keyframe
     if keyframes[-1] != last_idx:
-        dx = np.interp(np.arange(W), xp, flow_column_dx(prev_kf_small, last_small)) * scale
+        dxc, magc = flow_columns(prev_kf_small, last_small)
+        gap_dx.append(np.interp(np.arange(W), xp, dxc) * scale)
+        gap_motion.append(np.interp(np.arange(W), xp, magc))
         keyframes.append(last_idx)
-        gap_dx.append(dx)
         kf_sal.append(sal_col(last_small))
     if not gap_dx:                                   # single-frame guard
         keyframes = [0, max(0, n - 1)]
         gap_dx = [np.zeros(W)]
+        gap_motion = [np.zeros(W)]
         kf_sal = [kf_sal[0] if kf_sal else np.zeros(W)] * 2
+
+    # ---- blend motion saliency into the per-keyframe saliency profiles ----
+    kf_motion = [gap_motion[0]] + gap_motion         # align to keyframes
+
+    def _norm(p):
+        p = np.asarray(p, dtype=np.float64)
+        s = p.sum()
+        return p / s if s > 0 else p
+    kf_sal_blend = [motion_weight * _norm(kf_motion[j])
+                    + (1 - motion_weight) * _norm(kf_sal[j])
+                    for j in range(len(keyframes))]
 
     # ---- detect the trailing window (for the terminal decision) ----
     for idx, frame, gray, small in ring:
@@ -510,7 +557,10 @@ def process_video(path, out_root, alpha=DEFAULT_ALPHA, proc_width=DEFAULT_PROC_W
     w0 = max(0, n - detect_window)
     faces_win = [dets[k][0] for k in range(w0, n) if k in dets]
     people_win = [dets[k][1] for k in range(w0, n) if k in dets]
-    sal_win = [sal_col_by_i[k] for k in range(w0, n) if k in sal_col_by_i]
+    # trailing motion-blended saliency profiles (for the saliency terminal pick)
+    sal_win = [kf_sal_blend[j] for j in range(len(keyframes)) if keyframes[j] >= w0]
+    if not sal_win:
+        sal_win = kf_sal_blend[-2:]
 
     if is_forward:
         source = "epipole"
@@ -519,7 +569,10 @@ def process_video(path, out_root, alpha=DEFAULT_ALPHA, proc_width=DEFAULT_PROC_W
         x_terminal = float(xk[-1])
     else:
         x_terminal, source = decide_terminal_target(
-            faces_win, people_win, sal_win, W, crop_w)
+            faces_win, people_win, sal_win, W, crop_w, H)
+        # motion informs the terminal target (sal_win, above), but the smooth
+        # per-keyframe anchor stays on STATIC saliency — blending motion into the
+        # anchor makes it chase per-frame motion (waves/background) and destabilises.
         xk = backward_propagate_kf(x_terminal, keyframes, gap_dx, W, crop_w,
                                    kf_sal=kf_sal, anchor=anchor)
 
@@ -573,7 +626,6 @@ def process_video(path, out_root, alpha=DEFAULT_ALPHA, proc_width=DEFAULT_PROC_W
         obj_cov = np.ones(n)
 
     sal_profiles = {keyframes[j]: kf_sal[j] for j in range(len(keyframes))}
-    sal_profiles.update(sal_col_by_i)
     sal_idx = sorted(sal_profiles.keys())
     sal_vals = [saliency_coverage(sal_profiles[k], x_smooth[k]) for k in sal_idx]
     sal_cov = np.interp(np.arange(n), sal_idx, sal_vals) if sal_idx else np.ones(n)
@@ -627,7 +679,7 @@ def process_video(path, out_root, alpha=DEFAULT_ALPHA, proc_width=DEFAULT_PROC_W
                                   if valid_foe else None)},
         "params": {"alpha": alpha, "proc_width": proc_width,
                    "flow_stride": flow_stride, "detect_window": detect_window,
-                   "anchor": anchor, "full": full,
+                   "anchor": anchor, "motion_weight": motion_weight, "full": full,
                    "model": os.path.basename(model_path)},
         "output_video": out_video_rel,
         "output_overlay": out_overlay_rel,
@@ -763,6 +815,8 @@ def main():
                     help="number of trailing frames to run detectors on")
     ap.add_argument("--anchor", type=float, default=DEFAULT_ANCHOR,
                     help="0..1 blend toward per-keyframe saliency (0=pure flow)")
+    ap.add_argument("--motion-weight", type=float, default=DEFAULT_MOTION_WEIGHT,
+                    help="0..1 blend of motion vs static saliency (0=static only)")
     ap.add_argument("--full", action="store_true",
                     help="run detectors on every frame (slow, spec-faithful)")
     ap.add_argument("--model", default=os.path.join(
@@ -787,7 +841,8 @@ def main():
         try:
             process_video(p, args.out, alpha=args.alpha, proc_width=args.proc_width,
                           flow_stride=args.flow_stride, detect_window=args.detect_window,
-                          anchor=args.anchor, full=args.full, model_path=args.model,
+                          anchor=args.anchor, motion_weight=args.motion_weight,
+                          full=args.full, model_path=args.model,
                           render=not args.no_render)
             ok += 1
         except Exception as e:
