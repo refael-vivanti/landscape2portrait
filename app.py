@@ -220,13 +220,6 @@ def render_overview(index, history, current_algo):
 # --------------------------------------------------------------------------- #
 
 st.set_page_config(page_title="Landscape → Portrait Smart Crop", layout="wide")
-# Kill the slider fill's CSS transition — otherwise on each rerun the coloured
-# track animates and appears to fill from both sides.
-st.markdown(
-    "<style>div[data-baseweb='slider'] *{transition:none !important;"
-    "animation:none !important;}</style>",
-    unsafe_allow_html=True,
-)
 st.title("🎬 16:9 → 9:16 Smart Crop — Evaluation Dashboard")
 
 index = load_index()
@@ -332,7 +325,10 @@ if story:
 # ---- interactive inspector ----
 st.subheader("Frame-by-frame inspector")
 n = meta["n_frames"]
-idx = st.slider("Frame", 0, n - 1, 0)
+ic1, ic2 = st.columns([1, 3])
+idx = int(ic1.number_input("Frame", min_value=0, max_value=n - 1, value=0, step=1,
+                           help="Type a frame number or use ▲▼ to scrub."))
+ic2.caption(f"Frame {idx} of {n - 1}  ·  t = {round(idx / (meta['fps'] or 30), 2)} s")
 fmeta = frame_by_index(meta, idx)
 
 src = meta.get("path")
