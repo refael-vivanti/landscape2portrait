@@ -110,6 +110,13 @@ def to_rgb(img):
 # --------------------------------------------------------------------------- #
 
 st.set_page_config(page_title="Landscape → Portrait Smart Crop", layout="wide")
+# Kill the slider fill's CSS transition — otherwise on each rerun the coloured
+# track animates and appears to fill from both sides.
+st.markdown(
+    "<style>div[data-baseweb='slider'] *{transition:none !important;"
+    "animation:none !important;}</style>",
+    unsafe_allow_html=True,
+)
 st.title("🎬 16:9 → 9:16 Smart Crop — Evaluation Dashboard")
 
 index = load_index()
