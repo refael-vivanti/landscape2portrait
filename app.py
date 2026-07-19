@@ -91,7 +91,8 @@ def draw_overlays(img, fmeta, draw_sal_path=None, label=True):
             cv2.putText(img, f"person {conf}", (x, max(0, y - 6)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, PERSON_COLOR, 2)
     x0, y0, x1, y1 = fmeta["crop"]
-    cv2.rectangle(img, (x0, y0), (x1 - 1, y1 - 1), CROP_COLOR, 4)
+    thick = max(6, img.shape[1] // 60)   # scale with frame so it survives downscaling
+    cv2.rectangle(img, (x0, y0), (x1 - 1, y1 - 1), CROP_COLOR, thick)
     foe = fmeta.get("foe_x")
     if foe is not None:
         fx = int(max(0, min(img.shape[1] - 1, round(foe))))
@@ -170,17 +171,20 @@ st.caption("🟩 crop · 🟦 faces · 🟨 people · 🔴 saliency"
 
 story = meta.get("storyboard", [])
 if story:
-    cols = st.columns(len(story))
-    for k, s in enumerate(story):
-        fpath = os.path.join(ROOT, s["frame"])
-        spath = os.path.join(ROOT, s["saliency"])
-        if not os.path.exists(fpath):
-            cols[k].caption(f"{s['t']}s —")
-            continue
-        img = cv2.imread(fpath)
-        fmeta = frame_by_index(meta, s["i"])
-        img = draw_overlays(img, fmeta, draw_sal_path=spath, label=False)
-        cols[k].image(to_rgb(img), caption=f'{s["t"]}s', use_container_width=True)
+    per_row = (len(story) + 1) // 2          # two rows (e.g. 8 + 7)
+    for group in (story[:per_row], story[per_row:]):
+        cols = st.columns(per_row)
+        for k, s in enumerate(group):
+            fpath = os.path.join(ROOT, s["frame"])
+            spath = os.path.join(ROOT, s["saliency"])
+            if not os.path.exists(fpath):
+                cols[k].caption(f"{s['t']}s —")
+                continue
+            img = cv2.imread(fpath)
+            fmeta = frame_by_index(meta, s["i"])
+            img = draw_overlays(img, fmeta, draw_sal_path=spath, label=False)
+            cols[k].image(to_rgb(img), caption=f'{s["t"]}s',
+                          use_container_width=True)
 
 # ---- interactive inspector ----
 st.subheader("Frame-by-frame inspector")
