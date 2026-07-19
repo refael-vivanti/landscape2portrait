@@ -9,7 +9,7 @@ scipy>=1.11               # gaussian smoothing helpers
 matplotlib>=3.8           # heatmap colormaps for the dashboard
 
 # App / tooling
-streamlit>=1.30           # visualization dashboard
+streamlit>=1.36,<1.50     # dashboard (pinned <1.50: newer builds have a slider fill/thumb desync)
 gitpython>=3.1            # programmatic git operations
 google-genai>=0.3         # Gemini VLM evaluation (optional; needs GEMINI_API_KEY)
 openai>=1.40              # OpenAI-compatible VLM eval — Meta Llama API / OpenAI (optional)

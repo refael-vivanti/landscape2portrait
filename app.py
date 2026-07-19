@@ -220,15 +220,6 @@ def render_overview(index, history, current_algo):
 # --------------------------------------------------------------------------- #
 
 st.set_page_config(page_title="Landscape → Portrait Smart Crop", layout="wide")
-# The slider's coloured fill renders desynced from the thumb in this Streamlit
-# build, so hide the fill entirely — flat grey rail + red dot only.
-st.markdown("""
-<style>
-div[data-baseweb="slider"] [data-testid="stSliderTrack"] > div { background:#d0d3d9 !important; }
-div[data-baseweb="slider"] [data-testid="stSliderTrack"] div:not([role="slider"]) { background:#d0d3d9 !important; }
-div[data-baseweb="slider"] [role="slider"] { background:#ff4b4b !important; }
-</style>
-""", unsafe_allow_html=True)
 st.title("🎬 16:9 → 9:16 Smart Crop — Evaluation Dashboard")
 
 index = load_index()
