@@ -37,6 +37,7 @@ def main():
     ap.add_argument("--full", action="store_true", help="detect every frame (slow)")
     ap.add_argument("--model", default=os.path.join(ROOT, "models", "yolov8n.pt"))
     ap.add_argument("--force", action="store_true", help="reprocess even if JSON exists")
+    ap.add_argument("--no-render", action="store_true", help="skip video render (fast; metadata only)")
     ap.add_argument("--ai-eval", action="store_true",
                     help="run VLM evaluation after each video (needs a provider key)")
     ap.add_argument("--ai-provider", default="auto",
@@ -85,7 +86,8 @@ def main():
                           flow_stride=args.flow_stride,
                           detect_window=args.detect_window, anchor=args.anchor,
                           motion_weight=args.motion_weight,
-                          full=args.full, model_path=args.model)
+                          full=args.full, model_path=args.model,
+                          render=not args.no_render)
             if args.ai_eval:
                 from evaluate import evaluate_and_update
                 meta_path = os.path.join(meta_dir, stem + ".json")

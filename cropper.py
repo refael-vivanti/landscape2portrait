@@ -236,7 +236,7 @@ def _people_weak(people_pf, W, H, conf_thr=0.5):
         x, y, w, h = b[:4]
         return x <= 2 or (x + w) >= W - 2 or y <= 2 or (y + h) >= H - 2
     frac_partial = float(np.mean([partial(b) for b in boxes]))
-    return mean_conf < conf_thr or frac_partial > 0.5
+    return mean_conf < conf_thr and frac_partial > 0.5
 
 
 def decide_terminal_target(faces_pf, people_pf, sal_cols, W, crop_w, H=10 ** 9,
