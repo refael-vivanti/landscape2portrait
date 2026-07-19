@@ -66,7 +66,7 @@ DEFAULT_ANCHOR = 0.5        # blend toward per-keyframe saliency to fight flow d
 TERMINAL_WINDOW = 10        # number of trailing frames used for the terminal decision
 STORYBOARD_COUNT = 16       # number of evenly-spaced storyboard frames
 FWD_MIN_FRAC = 0.5          # >= this fraction of keyframes showing a focus-of-expansion => forward motion
-MEDIAN_K = 5               # temporal median window (keyframes) for trajectory de-spiking
+MEDIAN_K = 19              # temporal median window (keyframes) for trajectory de-spiking
 PORTRAIT_AR = 9.0 / 16.0    # width / height of the output
 
 
