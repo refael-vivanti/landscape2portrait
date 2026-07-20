@@ -603,29 +603,30 @@ def process_video(path, out_root, alpha=DEFAULT_ALPHA, proc_width=DEFAULT_PROC_W
         xk = np.interp(np.arange(len(keyframes)), idx, [kf_foe[j] for j in idx])
         x_terminal = float(xk[-1])
     else:
-        x_terminal, source = decide_terminal_target(
-            faces_win, people_win, sal_win, W, crop_w, H)
-        # When a subject (faces/people) wins, ANCHOR the whole trajectory to it —
-        # not just the terminal frame. Flow gives smooth continuity; the subject
-        # anchor (detected centres, interpolated across the clip) stops the crop
-        # drifting off the person. Anchoring (vs using the raw track) avoids the
-        # jumpiness of sparse/multi-subject detections.
-        # Track PEOPLE only (reliable YOLO). Haar faces false-positive on textures,
-        # so face-source clips keep the stable v7 flow+saliency path.
-        key = 1 if source == "people" else None
-        det_idx = [k for k in sorted(dets) if key is not None and dets[k][key]]
-        det_x = ([_window_argmax(_boxes_profile([dets[k][key]], W), crop_w)
-                  for k in det_idx] if det_idx else [])
-        # Only TRACK the subject when it is a single, consistent one; if the
-        # detections are scattered (multiple people / flickering false faces),
-        # tracking them jitters the crop, so fall back to the stable v7 anchor.
-        single_subject = len(det_x) >= 2 and float(np.std(det_x)) < 0.20 * W
-        if single_subject:
-            anchor_x = _median_filter(np.interp(keyframes, det_idx, det_x), 9)
+        # Prefer tracking a strong, CONSISTENT person across the whole clip —
+        # even when a (real) face on them made 'faces' win the hierarchy (4114693),
+        # and independent of the terminal source. YOLO person boxes are reliable;
+        # anchoring the trajectory to the person centre (interpolated + damped)
+        # keeps the crop on them without the jitter of using the raw track.
+        # Guards: require enough high-confidence, non-scattered detections, so
+        # multi-person clips (beach) and false-face/textured clips fall back to
+        # the stable v7 flow+saliency path.
+        # Consistency (low spread) discriminates a single tracked person from a
+        # scattered crowd; confidence does NOT (a lying-down subject can score
+        # lower than distant swimmers), so gate on spread + presence, not conf.
+        ppl_idx = [k for k in sorted(dets) if dets[k][1]]
+        ppl_x = [_window_argmax(_boxes_profile([dets[k][1]], W), crop_w) for k in ppl_idx]
+        strong_person = (len(ppl_idx) >= max(3, 0.4 * len(dets)) and bool(ppl_x)
+                         and float(np.std(ppl_x)) < 0.20 * W)
+        if strong_person:
+            source = "person"
+            anchor_x = _median_filter(np.interp(keyframes, ppl_idx, ppl_x), 9)
             x_terminal = float(anchor_x[-1])
             xk = backward_propagate_kf(x_terminal, keyframes, gap_dx, W, crop_w,
                                        anchor_x=anchor_x, anchor=DEFAULT_ANCHOR)
         else:
+            x_terminal, source = decide_terminal_target(
+                faces_win, people_win, sal_win, W, crop_w, H)
             xk = backward_propagate_kf(x_terminal, keyframes, gap_dx, W, crop_w,
                                        kf_sal=kf_sal, anchor=anchor)
 
