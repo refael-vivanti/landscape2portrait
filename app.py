@@ -228,7 +228,7 @@ if not index:
                "Run `python cropper.py --folder <videos> --limit 5` first.")
     st.stop()
 
-CURRENT_ALGO = 6   # keep in sync with cropper.ALGO_VERSION
+CURRENT_ALGO = 7   # keep in sync with cropper.ALGO_VERSION
 OVERVIEW = "📊 Overview"
 
 names = list(index.keys())

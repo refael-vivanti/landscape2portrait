@@ -34,6 +34,7 @@ def main():
     ap.add_argument("--detect-window", type=int, default=TERMINAL_WINDOW)
     ap.add_argument("--anchor", type=float, default=DEFAULT_ANCHOR)
     ap.add_argument("--motion-weight", type=float, default=DEFAULT_MOTION_WEIGHT)
+    ap.add_argument("--no-stabilize", action="store_true", help="disable output stabilization")
     ap.add_argument("--full", action="store_true", help="detect every frame (slow)")
     ap.add_argument("--model", default=os.path.join(ROOT, "models", "yolov8n.pt"))
     ap.add_argument("--force", action="store_true", help="reprocess even if JSON exists")
@@ -86,6 +87,7 @@ def main():
                           flow_stride=args.flow_stride,
                           detect_window=args.detect_window, anchor=args.anchor,
                           motion_weight=args.motion_weight,
+                          stabilize=not args.no_stabilize,
                           full=args.full, model_path=args.model,
                           render=not args.no_render)
             if args.ai_eval:

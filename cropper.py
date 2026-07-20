@@ -56,8 +56,16 @@ import numpy as np
 #     stability; 15-frame storyboard; landscape green-frame overlay render.
 # v6: motion saliency blended into the saliency signal; weak/partial person
 #     detections fall through to it (so the crop can follow the moving action).
-ALGO_VERSION = 6
+# v7: epipole from ~1s-apart frames + EMA (stable heading); final output video
+#     stabilization via long-term feature tracking (removes residual jitter).
+ALGO_VERSION = 7
 
+DEFAULT_STABILIZE = True     # feature-tracking stabilization pass on the rendered output
+STAB_ZOOM = 1.04            # slight zoom to hide stabilization warp borders
+STAB_RADIUS_SEC = 1.0       # moving-average radius (seconds) for the long-term trajectory
+STAB_MIN_SHAKE = 0.8        # px: skip stabilization when the source is already steady
+                            # (avoids adding resample noise; sub-pixel crop still applies)
+EPIPOLE_EMA = 0.9           # epipole smoothing: new = 0.9*last + 0.1*measured
 DEFAULT_MOTION_WEIGHT = 0.5  # blend: saliency = w*motion + (1-w)*static (0 = static only)
 DEFAULT_ALPHA = 0.15        # EMA weight on the raw target (lower = smoother)
 DEFAULT_PROC_WIDTH = 480    # width used for flow / saliency (speed vs accuracy)
@@ -403,7 +411,8 @@ def ema_smooth(x_target, alpha, W, crop_w):
 def process_video(path, out_root, alpha=DEFAULT_ALPHA, proc_width=DEFAULT_PROC_WIDTH,
                   flow_stride=DEFAULT_FLOW_STRIDE, detect_window=TERMINAL_WINDOW,
                   anchor=DEFAULT_ANCHOR, motion_weight=DEFAULT_MOTION_WEIGHT,
-                  model_path="yolov8n.pt", render=True, verbose=True, full=False):
+                  stabilize=DEFAULT_STABILIZE, model_path="yolov8n.pt", render=True,
+                  verbose=True, full=False):
     """
     Fast pipeline:
       * heavy detectors (YOLO person + Haar face + saliency) run ONLY on the
@@ -462,7 +471,7 @@ def process_video(path, out_root, alpha=DEFAULT_ALPHA, proc_width=DEFAULT_PROC_W
 
     dets = {}                          # frame index -> (faces, people, (sal_mean, sal_max))
     sal_col_by_i = {}                  # frame index -> saliency column profile (len W)
-    keyframes, gap_dx, gap_motion, kf_sal = [], [], [], []
+    keyframes, gap_dx, gap_motion, kf_sal, kf_small = [], [], [], [], []
     prev_kf_small, prev_kf_idx = None, None
     last_small, last_idx = None, None
     ring = deque(maxlen=detect_window)  # trailing (idx, frame, gray, small)
@@ -479,6 +488,7 @@ def process_video(path, out_root, alpha=DEFAULT_ALPHA, proc_width=DEFAULT_PROC_W
         if prev_kf_small is None:
             keyframes.append(i)                     # first keyframe, no preceding gap
             kf_sal.append(sal_col(small))
+            kf_small.append(small)
             prev_kf_small, prev_kf_idx = small, i
         elif i - prev_kf_idx >= flow_stride:
             dxc, magc = flow_columns(prev_kf_small, small)
@@ -486,6 +496,7 @@ def process_video(path, out_root, alpha=DEFAULT_ALPHA, proc_width=DEFAULT_PROC_W
             gap_motion.append(np.interp(np.arange(W), xp, magc))
             keyframes.append(i)
             kf_sal.append(sal_col(small))
+            kf_small.append(small)
             prev_kf_small, prev_kf_idx = small, i
         last_small, last_idx = small, i
 
@@ -522,11 +533,13 @@ def process_video(path, out_root, alpha=DEFAULT_ALPHA, proc_width=DEFAULT_PROC_W
         gap_motion.append(np.interp(np.arange(W), xp, magc))
         keyframes.append(last_idx)
         kf_sal.append(sal_col(last_small))
+        kf_small.append(last_small)
     if not gap_dx:                                   # single-frame guard
         keyframes = [0, max(0, n - 1)]
         gap_dx = [np.zeros(W)]
         gap_motion = [np.zeros(W)]
         kf_sal = [kf_sal[0] if kf_sal else np.zeros(W)] * 2
+        kf_small = [kf_small[0] if kf_small else None] * 2
 
     # ---- blend motion saliency into the per-keyframe saliency profiles ----
     kf_motion = [gap_motion[0]] + gap_motion         # align to keyframes
@@ -546,12 +559,26 @@ def process_video(path, out_root, alpha=DEFAULT_ALPHA, proc_width=DEFAULT_PROC_W
             dets[idx] = (faces, people, stt)
             sal_col_by_i[idx] = col_full
 
-    # ---- focus-of-expansion (epipole) detection for forward-motion clips ----
-    gap_foe = [focus_of_expansion(dx, W) for dx in gap_dx]
-    valid_foe = [f for f in gap_foe if f is not None]
-    foe_fraction = len(valid_foe) / len(gap_foe) if gap_foe else 0.0
+    # ---- focus-of-expansion (epipole) from ~1s-apart frames + EMA smoothing ----
+    # Larger temporal baseline (1s) makes the divergence -> FOE estimate far more
+    # stable than consecutive keyframes; an exponential filter removes residual jitter.
+    kback = max(1, int(round((fps or 30) / max(1, flow_stride))))   # keyframes ~= 1s apart
+    raw_foe = []
+    for j in range(len(keyframes)):
+        a = j - kback
+        if a < 0 or kf_small[j] is None or kf_small[a] is None:
+            raw_foe.append(None)
+            continue
+        dxc, _ = flow_columns(kf_small[a], kf_small[j])
+        raw_foe.append(focus_of_expansion(np.interp(np.arange(W), xp, dxc) * scale, W))
+    kf_foe, ema = [None] * len(keyframes), None
+    for j, f in enumerate(raw_foe):
+        if f is not None:
+            ema = f if ema is None else EPIPOLE_EMA * ema + (1 - EPIPOLE_EMA) * f
+        kf_foe[j] = ema                                   # EMA-smoothed epipole (carried through gaps)
+    valid_foe = [f for f in raw_foe if f is not None]
+    foe_fraction = len(valid_foe) / max(1, len(raw_foe))
     is_forward = foe_fraction >= FWD_MIN_FRAC and len(valid_foe) >= 2
-    kf_foe = [gap_foe[0] if gap_foe else None] + gap_foe   # aligned to keyframes
 
     # ---- choose target trajectory: epipole WINS on forward motion ----
     w0 = max(0, n - detect_window)
@@ -638,7 +665,11 @@ def process_video(path, out_root, alpha=DEFAULT_ALPHA, proc_width=DEFAULT_PROC_W
         out_dir = os.path.join(out_root, "outputs")
         os.makedirs(out_dir, exist_ok=True)
         out_path = os.path.join(out_dir, f"{name}_portrait.mp4")
-        _render(path, out_path, x_smooth, crop_w, H, fps)
+        correction = None
+        if stabilize:
+            correction = _estimate_stab_correction(
+                path, proc_width, radius=max(1, int(round((fps or 30) * STAB_RADIUS_SEC))))
+        _render(path, out_path, x_smooth, crop_w, H, fps, correction=correction)
         out_video_rel = os.path.relpath(out_path, out_root)
         ov_path = os.path.join(out_dir, f"{name}_overlay.mp4")
         _render_overlay(path, ov_path, x_smooth, foe_frame, crop_w, W, H, fps)
@@ -679,7 +710,8 @@ def process_video(path, out_root, alpha=DEFAULT_ALPHA, proc_width=DEFAULT_PROC_W
                                   if valid_foe else None)},
         "params": {"alpha": alpha, "proc_width": proc_width,
                    "flow_stride": flow_stride, "detect_window": detect_window,
-                   "anchor": anchor, "motion_weight": motion_weight, "full": full,
+                   "anchor": anchor, "motion_weight": motion_weight,
+                   "stabilize": stabilize, "full": full,
                    "model": os.path.basename(model_path)},
         "output_video": out_video_rel,
         "output_overlay": out_overlay_rel,
@@ -707,10 +739,78 @@ def process_video(path, out_root, alpha=DEFAULT_ALPHA, proc_width=DEFAULT_PROC_W
     return meta
 
 
-def _render(src_path, out_path, x_smooth, crop_w, H, fps):
+def _moving_avg(x, radius):
+    """Box moving average (edge-clamped) — the long-term trajectory smoother."""
+    x = np.asarray(x, dtype=np.float64)
+    n = len(x)
+    if n == 0 or radius < 1:
+        return x
+    out = np.empty(n)
+    for i in range(n):
+        out[i] = x[max(0, i - radius):min(n, i + radius + 1)].mean()
+    return out
+
+
+def _estimate_stab_correction(src_path, proc_w, radius):
+    """
+    Long-term feature-tracking stabilization: track corners frame-to-frame
+    (goodFeaturesToTrack + LK), fit a similarity transform (shift+rotate+zoom),
+    accumulate the camera trajectory, smooth it over a long window, and return the
+    per-frame correction (dx, dy, da in full-res px / radians) that cancels the
+    high-frequency jitter while preserving the intended slow motion.
+    """
+    cap = cv2.VideoCapture(src_path)
+    W = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    sc = W / float(proc_w)
+    ok, prev = cap.read()
+    if not ok:
+        cap.release()
+        return None
+    ph = max(1, int(round(prev.shape[0] / sc)))
+    pg = cv2.cvtColor(cv2.resize(prev, (proc_w, ph)), cv2.COLOR_BGR2GRAY)
+    transforms = []
+    while True:
+        ok, f = cap.read()
+        if not ok:
+            break
+        g = cv2.cvtColor(cv2.resize(f, (proc_w, ph)), cv2.COLOR_BGR2GRAY)
+        dx = dy = da = 0.0
+        pts = cv2.goodFeaturesToTrack(pg, maxCorners=200, qualityLevel=0.01,
+                                      minDistance=15, blockSize=3)
+        if pts is not None and len(pts) >= 6:
+            npts, stt, _ = cv2.calcOpticalFlowPyrLK(pg, g, pts, None)
+            if npts is not None:
+                gp, gn = pts[stt == 1], npts[stt == 1]
+                if len(gp) >= 6:
+                    M, _ = cv2.estimateAffinePartial2D(gp, gn)
+                    if M is not None:
+                        dx, dy = M[0, 2] * sc, M[1, 2] * sc
+                        da = float(np.arctan2(M[1, 0], M[0, 0]))
+        transforms.append((dx, dy, da))
+        pg = g
+    cap.release()
+
+    n = len(transforms) + 1
+    traj = np.zeros((n, 3))
+    for i, (dx, dy, da) in enumerate(transforms):
+        traj[i + 1] = traj[i] + (dx, dy, da)
+    smooth = np.stack([_moving_avg(traj[:, k], radius) for k in range(3)], axis=1)
+    correction = smooth - traj                        # correction per frame
+    # Lightly smooth the correction: cancels sustained drift/rotation without
+    # re-injecting the per-frame estimation noise (the sub-pixel crop handles HF).
+    correction = np.stack([_moving_avg(correction[:, k], 2) for k in range(3)], axis=1)
+    # only stabilize when there is meaningful shake to remove; otherwise skip so
+    # the (already steady) clip isn't degraded by warp-resample noise.
+    shake = float(np.hypot(correction[:, 0], correction[:, 1]).std())
+    return correction if shake >= STAB_MIN_SHAKE else None
+
+
+def _render(src_path, out_path, x_smooth, crop_w, H, fps, correction=None):
     """Crop each frame and write an H.264 (yuv420p, faststart) mp4 so the result
     plays in browsers / the Streamlit dashboard. Falls back to the avc1 writer
-    when ffmpeg is not on PATH."""
+    when ffmpeg is not on PATH. When ``correction`` is given, each source frame is
+    first stabilized (warp by the per-frame correction + a slight zoom to hide
+    borders) before cropping, removing residual jitter."""
     import shutil
     import subprocess
 
@@ -723,15 +823,29 @@ def _render(src_path, out_path, x_smooth, crop_w, H, fps):
     tmp = out_path + ".tmp.mp4" if ffmpeg else out_path
     fourcc = cv2.VideoWriter_fourcc(*("mp4v" if ffmpeg else "avc1"))
     writer = cv2.VideoWriter(tmp, fourcc, fps, (crop_w, H))
-    half = crop_w // 2
+    half = crop_w / 2.0
     t = 0
     while True:
         ok, frame = cap.read()
         if not ok:
             break
-        c = x_smooth[min(t, len(x_smooth) - 1)]
-        x0 = int(np.clip(round(c - half), 0, W - crop_w))
-        writer.write(frame[:, x0:x0 + crop_w])
+        c = float(x_smooth[min(t, len(x_smooth) - 1)])
+        c = min(max(c, half), W - half)
+        # Sub-pixel crop (removes the ~1px integer-quantization shimmer): affine that
+        # maps source column c -> output centre. Optionally composed with the
+        # feature-tracking stabilization warp (rotate+zoom+shift) in one resample.
+        crop_m = np.array([[1.0, 0.0, half - c], [0.0, 1.0, 0.0]])
+        if correction is not None and t < len(correction):
+            dx, dy, da = correction[t]
+            S = cv2.getRotationMatrix2D((W / 2.0, H / 2.0), float(np.degrees(da)), STAB_ZOOM)
+            S[0, 2] += dx
+            S[1, 2] += dy
+            S3 = np.vstack([S, [0, 0, 1]])
+            C3 = np.vstack([crop_m, [0, 0, 1]])
+            crop_m = (C3 @ S3)[:2]
+        out = cv2.warpAffine(frame, crop_m, (crop_w, H),
+                             flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT101)
+        writer.write(out)
         t += 1
     writer.release()
     cap.release()
@@ -817,6 +931,8 @@ def main():
                     help="0..1 blend toward per-keyframe saliency (0=pure flow)")
     ap.add_argument("--motion-weight", type=float, default=DEFAULT_MOTION_WEIGHT,
                     help="0..1 blend of motion vs static saliency (0=static only)")
+    ap.add_argument("--no-stabilize", action="store_true",
+                    help="disable the feature-tracking output stabilization pass")
     ap.add_argument("--full", action="store_true",
                     help="run detectors on every frame (slow, spec-faithful)")
     ap.add_argument("--model", default=os.path.join(
@@ -842,6 +958,7 @@ def main():
             process_video(p, args.out, alpha=args.alpha, proc_width=args.proc_width,
                           flow_stride=args.flow_stride, detect_window=args.detect_window,
                           anchor=args.anchor, motion_weight=args.motion_weight,
+                          stabilize=not args.no_stabilize,
                           full=args.full, model_path=args.model,
                           render=not args.no_render)
             ok += 1

@@ -130,6 +130,26 @@ and the dashboard's main player is the **original 16:9 with the moving green cro
 frame** (+ a magenta heading marker on forward clips) so you can see what is kept
 vs discarded; the 9:16 portrait output is in a secondary expander.
 
+## Stabilization & stable epipole (v7)
+
+Two refinements make the final output visibly steadier:
+
+- **Sub-pixel crop.** The crop window is extracted with a sub-pixel affine warp
+  instead of an integer slice, removing the ~1px per-frame quantization shimmer
+  (measured horizontal jitter drops from ~1px to ~0.07–0.12px). This is the main
+  cure for the "very small jitters."
+- **Long-term feature-tracking stabilization.** `_estimate_stab_correction`
+  tracks corners frame-to-frame (goodFeaturesToTrack + LK), fits a similarity
+  transform (shift+rotate+zoom), accumulates the camera trajectory, smooths it
+  over a ~1s window, and warps each frame to cancel the residual shake (with a
+  slight `STAB_ZOOM` to hide borders). It is **adaptive** — skipped when the clip
+  is already steady (below `STAB_MIN_SHAKE`) so it never adds resample noise.
+  Disable with `--no-stabilize`.
+- **Stable epipole.** The focus-of-expansion is now estimated from frames **~1s
+  apart** (a much larger, less noisy baseline) and passed through an exponential
+  filter (`epipole = 0.9·last + 0.1·new`), so the heading target is steady and
+  fewer clips are falsely flagged as forward motion.
+
 ## Evaluation & analytics
 
 Two complementary quality signals are produced per video.
