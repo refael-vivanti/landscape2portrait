@@ -56,9 +56,13 @@ import numpy as np
 #     stability; 15-frame storyboard; landscape green-frame overlay render.
 # v6: motion saliency blended into the saliency signal; weak/partial person
 #     detections fall through to it (so the crop can follow the moving action).
+# v8: anchor the whole trajectory to a detected PERSON (not just the terminal
+#     frame) when it's a single consistent subject — fixes crops that drift off
+#     the person (e.g. 5127498). Gated by subject-consistency; faces/scattered
+#     detections keep the stable v7 flow+saliency path.
 # v7: epipole from ~1s-apart frames + EMA (stable heading); final output video
 #     stabilization via long-term feature tracking (removes residual jitter).
-ALGO_VERSION = 7
+ALGO_VERSION = 8
 
 DEFAULT_STABILIZE = True     # feature-tracking stabilization pass on the rendered output
 STAB_ZOOM = 1.04            # slight zoom to hide stabilization warp borders
@@ -289,16 +293,18 @@ def backward_propagate(x_terminal, col_dx, n, W, crop_w):
 
 
 def backward_propagate_kf(x_terminal, keyframes, gap_dx, W, crop_w,
-                          kf_sal=None, anchor=0.0):
+                          kf_sal=None, anchor_x=None, anchor=0.0):
     """
     Keyframe version of the backward pass (used by the fast pipeline).
     keyframes : ascending frame indices where flow was sampled (first = 0).
     gap_dx[j] : per-column horizontal flow from keyframes[j] -> keyframes[j+1].
 
-    Pure optical-flow integration drifts over long clips, so when per-keyframe
-    saliency profiles (``kf_sal``) are supplied and ``anchor`` > 0, each step is a
-    blend of the flow-propagated centre and that keyframe's saliency-optimal
-    centre. ``anchor=0`` reproduces the pure-flow (spec) behaviour.
+    Pure optical-flow integration drifts over long clips, so when ``anchor`` > 0
+    each step is a blend of the flow-propagated centre and a drift-correcting
+    anchor. The anchor per keyframe is ``anchor_x[j]`` when given (e.g. the
+    tracked subject centre — keeps the crop ON a detected person/face without the
+    jumpiness of using the raw track directly), otherwise the saliency-optimal
+    centre from ``kf_sal[j]``. ``anchor=0`` = pure flow.
     Returns the crop centre at each keyframe; interpolate for the rest.
     """
     m = len(keyframes)
@@ -310,11 +316,13 @@ def backward_propagate_kf(x_terminal, keyframes, gap_dx, W, crop_w,
         lo, hi = max(0, c - half), min(W, c + half)
         dx = float(np.mean(gap_dx[j][lo:hi])) if hi > lo else 0.0
         flow_pos = xk[j + 1] - dx    # content at keyframes[j+1] was here at keyframes[j]
-        if anchor > 0 and kf_sal is not None and kf_sal[j] is not None:
-            sal_pos = _window_argmax(kf_sal[j], crop_w)   # drift-correcting anchor
-            xk[j] = anchor * sal_pos + (1 - anchor) * flow_pos
-        else:
-            xk[j] = flow_pos
+        ap = None
+        if anchor > 0:
+            if anchor_x is not None:
+                ap = float(anchor_x[j])
+            elif kf_sal is not None and kf_sal[j] is not None:
+                ap = _window_argmax(kf_sal[j], crop_w)
+        xk[j] = (anchor * ap + (1 - anchor) * flow_pos) if ap is not None else flow_pos
     return xk
 
 
@@ -597,11 +605,29 @@ def process_video(path, out_root, alpha=DEFAULT_ALPHA, proc_width=DEFAULT_PROC_W
     else:
         x_terminal, source = decide_terminal_target(
             faces_win, people_win, sal_win, W, crop_w, H)
-        # motion informs the terminal target (sal_win, above), but the smooth
-        # per-keyframe anchor stays on STATIC saliency — blending motion into the
-        # anchor makes it chase per-frame motion (waves/background) and destabilises.
-        xk = backward_propagate_kf(x_terminal, keyframes, gap_dx, W, crop_w,
-                                   kf_sal=kf_sal, anchor=anchor)
+        # When a subject (faces/people) wins, ANCHOR the whole trajectory to it —
+        # not just the terminal frame. Flow gives smooth continuity; the subject
+        # anchor (detected centres, interpolated across the clip) stops the crop
+        # drifting off the person. Anchoring (vs using the raw track) avoids the
+        # jumpiness of sparse/multi-subject detections.
+        # Track PEOPLE only (reliable YOLO). Haar faces false-positive on textures,
+        # so face-source clips keep the stable v7 flow+saliency path.
+        key = 1 if source == "people" else None
+        det_idx = [k for k in sorted(dets) if key is not None and dets[k][key]]
+        det_x = ([_window_argmax(_boxes_profile([dets[k][key]], W), crop_w)
+                  for k in det_idx] if det_idx else [])
+        # Only TRACK the subject when it is a single, consistent one; if the
+        # detections are scattered (multiple people / flickering false faces),
+        # tracking them jitters the crop, so fall back to the stable v7 anchor.
+        single_subject = len(det_x) >= 2 and float(np.std(det_x)) < 0.20 * W
+        if single_subject:
+            anchor_x = _median_filter(np.interp(keyframes, det_idx, det_x), 9)
+            x_terminal = float(anchor_x[-1])
+            xk = backward_propagate_kf(x_terminal, keyframes, gap_dx, W, crop_w,
+                                       anchor_x=anchor_x, anchor=DEFAULT_ANCHOR)
+        else:
+            xk = backward_propagate_kf(x_terminal, keyframes, gap_dx, W, crop_w,
+                                       kf_sal=kf_sal, anchor=anchor)
 
     # ---- de-spike (both paths) + interpolate + smooth ----
     xk = _median_filter(xk, MEDIAN_K)
