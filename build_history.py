@@ -8,7 +8,7 @@ sys.path.insert(0, ROOT)
 from cropper import stability_grade
 
 # (label, git ref).  "WORKTREE" = current files on disk.
-SNAPSHOTS = [("v4", "2a655a1"), ("v5", "e115518"), ("v6", "WORKTREE")]
+SNAPSHOTS = [("v4", "2a655a1"), ("v5", "e115518"), ("v6", "d67c12b"), ("v7", "WORKTREE")]
 
 
 def load(ref, fname):

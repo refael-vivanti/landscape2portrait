@@ -2,7 +2,8 @@
 "versions": [
 "v4",
 "v5",
-"v6"
+"v6",
+"v7"
 ],
 "videos": [
 "10388072",
@@ -2251,6 +2252,716 @@
 "9889148": {
 "math": 78.6,
 "stability": 99,
+"grade": "A",
+"ai": null
+}
+},
+"v7": {
+"10388072": {
+"math": 83.0,
+"stability": 79,
+"grade": "B",
+"ai": null
+},
+"10398657": {
+"math": 80.6,
+"stability": 99,
+"grade": "A",
+"ai": null
+},
+"11132816": {
+"math": 83.7,
+"stability": 66,
+"grade": "C",
+"ai": null
+},
+"11353413": {
+"math": 56.3,
+"stability": 100,
+"grade": "A",
+"ai": null
+},
+"11848823": {
+"math": 78.6,
+"stability": 98,
+"grade": "A",
+"ai": null
+},
+"11967303": {
+"math": 54.0,
+"stability": 68,
+"grade": "C",
+"ai": null
+},
+"12142075": {
+"math": 73.1,
+"stability": 99,
+"grade": "A",
+"ai": null
+},
+"12990963": {
+"math": 80.2,
+"stability": 80,
+"grade": "B",
+"ai": null
+},
+"13141640": {
+"math": 46.4,
+"stability": 98,
+"grade": "A",
+"ai": null
+},
+"13505065": {
+"math": 83.2,
+"stability": 99,
+"grade": "A",
+"ai": null
+},
+"13658220": {
+"math": 44.8,
+"stability": 100,
+"grade": "A",
+"ai": null
+},
+"13965282": {
+"math": 83.3,
+"stability": 100,
+"grade": "A",
+"ai": null
+},
+"14369070": {
+"math": 34.9,
+"stability": 89,
+"grade": "A",
+"ai": null
+},
+"14503011": {
+"math": 80.7,
+"stability": 95,
+"grade": "A",
+"ai": null
+},
+"14627395": {
+"math": 80.7,
+"stability": 65,
+"grade": "C",
+"ai": null
+},
+"14946103": {
+"math": 82.9,
+"stability": 98,
+"grade": "A",
+"ai": null
+},
+"15756877": {
+"math": 74.4,
+"stability": 100,
+"grade": "A",
+"ai": null
+},
+"15953001": {
+"math": 71.7,
+"stability": 97,
+"grade": "A",
+"ai": null
+},
+"16436843": {
+"math": 46.3,
+"stability": 97,
+"grade": "A",
+"ai": null
+},
+"16577316": {
+"math": 73.0,
+"stability": 56,
+"grade": "C",
+"ai": null
+},
+"17027892": {
+"math": 40.8,
+"stability": 99,
+"grade": "A",
+"ai": null
+},
+"17259133": {
+"math": 49.7,
+"stability": 99,
+"grade": "A",
+"ai": null
+},
+"17394016": {
+"math": 80.5,
+"stability": 100,
+"grade": "A",
+"ai": null
+},
+"18284004": {
+"math": 83.9,
+"stability": 69,
+"grade": "C",
+"ai": null
+},
+"19921408": {
+"math": 52.2,
+"stability": 99,
+"grade": "A",
+"ai": null
+},
+"20197853": {
+"math": 81.6,
+"stability": 90,
+"grade": "A",
+"ai": null
+},
+"2085089": {
+"math": 93.4,
+"stability": 100,
+"grade": "A",
+"ai": null
+},
+"2776523": {
+"math": 78.0,
+"stability": 98,
+"grade": "A",
+"ai": null
+},
+"3434773": {
+"math": 84.1,
+"stability": 100,
+"grade": "A",
+"ai": null
+},
+"4114693": {
+"math": 15.9,
+"stability": 100,
+"grade": "A",
+"ai": null
+},
+"4121750": {
+"math": 60.2,
+"stability": 99,
+"grade": "A",
+"ai": null
+},
+"4148357": {
+"math": 70.1,
+"stability": 100,
+"grade": "A",
+"ai": null
+},
+"4385153": {
+"math": 67.6,
+"stability": 80,
+"grade": "B",
+"ai": null
+},
+"4482955": {
+"math": 85.8,
+"stability": 100,
+"grade": "A",
+"ai": null
+},
+"4492643": {
+"math": 70.2,
+"stability": 100,
+"grade": "A",
+"ai": null
+},
+"4553802": {
+"math": 82.9,
+"stability": 100,
+"grade": "A",
+"ai": null
+},
+"4590588": {
+"math": 62.6,
+"stability": 98,
+"grade": "A",
+"ai": null
+},
+"4625255": {
+"math": 65.3,
+"stability": 100,
+"grade": "A",
+"ai": null
+},
+"4711915": {
+"math": 70.0,
+"stability": 99,
+"grade": "A",
+"ai": null
+},
+"4938043": {
+"math": 38.5,
+"stability": 99,
+"grade": "A",
+"ai": null
+},
+"4958580": {
+"math": 68.4,
+"stability": 99,
+"grade": "A",
+"ai": null
+},
+"5005954": {
+"math": 64.5,
+"stability": 100,
+"grade": "A",
+"ai": null
+},
+"5045063": {
+"math": 49.9,
+"stability": 59,
+"grade": "C",
+"ai": null
+},
+"5061349": {
+"math": 61.0,
+"stability": 99,
+"grade": "A",
+"ai": null
+},
+"5086607": {
+"math": 82.6,
+"stability": 99,
+"grade": "A",
+"ai": null
+},
+"5127498": {
+"math": 30.2,
+"stability": 100,
+"grade": "A",
+"ai": null
+},
+"5147632": {
+"math": 58.0,
+"stability": 97,
+"grade": "A",
+"ai": null
+},
+"5363072": {
+"math": 81.4,
+"stability": 96,
+"grade": "A",
+"ai": null
+},
+"5378771": {
+"math": 94.6,
+"stability": 100,
+"grade": "A",
+"ai": null
+},
+"5389008": {
+"math": 58.1,
+"stability": 96,
+"grade": "A",
+"ai": null
+},
+"5415175": {
+"math": 18.5,
+"stability": 100,
+"grade": "A",
+"ai": null
+},
+"5416028": {
+"math": 42.6,
+"stability": 99,
+"grade": "A",
+"ai": null
+},
+"5450160": {
+"math": 53.0,
+"stability": 98,
+"grade": "A",
+"ai": null
+},
+"5534956": {
+"math": 32.9,
+"stability": 100,
+"grade": "A",
+"ai": null
+},
+"5564617": {
+"math": 30.7,
+"stability": 99,
+"grade": "A",
+"ai": null
+},
+"5587280": {
+"math": 34.7,
+"stability": 49,
+"grade": "D",
+"ai": null
+},
+"5632847": {
+"math": 49.9,
+"stability": 100,
+"grade": "A",
+"ai": null
+},
+"5780433": {
+"math": 43.3,
+"stability": 99,
+"grade": "A",
+"ai": null
+},
+"5922614": {
+"math": 53.0,
+"stability": 49,
+"grade": "D",
+"ai": null
+},
+"6031902": {
+"math": 45.5,
+"stability": 53,
+"grade": "D",
+"ai": null
+},
+"6149773": {
+"math": 28.3,
+"stability": 100,
+"grade": "A",
+"ai": null
+},
+"6212274": {
+"math": 41.5,
+"stability": 32,
+"grade": "F",
+"ai": null
+},
+"6225023": {
+"math": 57.1,
+"stability": 100,
+"grade": "A",
+"ai": null
+},
+"6260853": {
+"math": 36.2,
+"stability": 96,
+"grade": "A",
+"ai": null
+},
+"6270953": {
+"math": 78.4,
+"stability": 99,
+"grade": "A",
+"ai": null
+},
+"6327111": {
+"math": 46.8,
+"stability": 98,
+"grade": "A",
+"ai": null
+},
+"6380709": {
+"math": 79.0,
+"stability": 98,
+"grade": "A",
+"ai": null
+},
+"6396252": {
+"math": 32.6,
+"stability": 98,
+"grade": "A",
+"ai": null
+},
+"6406169": {
+"math": 68.8,
+"stability": 84,
+"grade": "B",
+"ai": null
+},
+"6412615": {
+"math": 39.0,
+"stability": 100,
+"grade": "A",
+"ai": null
+},
+"6498755": {
+"math": 45.3,
+"stability": 98,
+"grade": "A",
+"ai": null
+},
+"6514284": {
+"math": 84.5,
+"stability": 100,
+"grade": "A",
+"ai": null
+},
+"6576611": {
+"math": 26.2,
+"stability": 99,
+"grade": "A",
+"ai": null
+},
+"6602323": {
+"math": 53.9,
+"stability": 99,
+"grade": "A",
+"ai": null
+},
+"6647967": {
+"math": 59.6,
+"stability": 99,
+"grade": "A",
+"ai": null
+},
+"6710606": {
+"math": 81.4,
+"stability": 99,
+"grade": "A",
+"ai": null
+},
+"6724742": {
+"math": 54.4,
+"stability": 50,
+"grade": "D",
+"ai": null
+},
+"6810469": {
+"math": 75.3,
+"stability": 95,
+"grade": "A",
+"ai": null
+},
+"6970489": {
+"math": 52.6,
+"stability": 97,
+"grade": "A",
+"ai": null
+},
+"7143723": {
+"math": 55.5,
+"stability": 99,
+"grade": "A",
+"ai": null
+},
+"7155061": {
+"math": 11.8,
+"stability": 98,
+"grade": "A",
+"ai": null
+},
+"7221199": {
+"math": 35.6,
+"stability": 100,
+"grade": "A",
+"ai": null
+},
+"7251424": {
+"math": 60.4,
+"stability": 99,
+"grade": "A",
+"ai": null
+},
+"7297394": {
+"math": 44.0,
+"stability": 97,
+"grade": "A",
+"ai": null
+},
+"7318376": {
+"math": 17.5,
+"stability": 98,
+"grade": "A",
+"ai": null
+},
+"7319003": {
+"math": 57.1,
+"stability": 98,
+"grade": "A",
+"ai": null
+},
+"7355425": {
+"math": 42.6,
+"stability": 99,
+"grade": "A",
+"ai": null
+},
+"7425484": {
+"math": 23.0,
+"stability": 56,
+"grade": "C",
+"ai": null
+},
+"7451071": {
+"math": 79.9,
+"stability": 99,
+"grade": "A",
+"ai": null
+},
+"7525862": {
+"math": 61.2,
+"stability": 99,
+"grade": "A",
+"ai": null
+},
+"7578640": {
+"math": 38.5,
+"stability": 100,
+"grade": "A",
+"ai": null
+},
+"7643314": {
+"math": 85.7,
+"stability": 98,
+"grade": "A",
+"ai": null
+},
+"7692790": {
+"math": 12.8,
+"stability": 100,
+"grade": "A",
+"ai": null
+},
+"7747235": {
+"math": 74.2,
+"stability": 85,
+"grade": "A",
+"ai": null
+},
+"7926586": {
+"math": 39.3,
+"stability": 99,
+"grade": "A",
+"ai": null
+},
+"8041936": {
+"math": 25.6,
+"stability": 92,
+"grade": "A",
+"ai": null
+},
+"8116167": {
+"math": 53.8,
+"stability": 99,
+"grade": "A",
+"ai": null
+},
+"8141171": {
+"math": 47.2,
+"stability": 99,
+"grade": "A",
+"ai": null
+},
+"8191005": {
+"math": 77.6,
+"stability": 63,
+"grade": "C",
+"ai": null
+},
+"8327171": {
+"math": 71.0,
+"stability": 51,
+"grade": "D",
+"ai": null
+},
+"8357646": {
+"math": 82.0,
+"stability": 99,
+"grade": "A",
+"ai": null
+},
+"8406623": {
+"math": 63.5,
+"stability": 100,
+"grade": "A",
+"ai": null
+},
+"8451587": {
+"math": 84.5,
+"stability": 99,
+"grade": "A",
+"ai": null
+},
+"8472591": {
+"math": 54.0,
+"stability": 99,
+"grade": "A",
+"ai": null
+},
+"8515874": {
+"math": 55.4,
+"stability": 98,
+"grade": "A",
+"ai": null
+},
+"854024": {
+"math": 65.7,
+"stability": 100,
+"grade": "A",
+"ai": null
+},
+"856510": {
+"math": 35.5,
+"stability": 98,
+"grade": "A",
+"ai": null
+},
+"8567120": {
+"math": 19.4,
+"stability": 99,
+"grade": "A",
+"ai": null
+},
+"8574304": {
+"math": 56.3,
+"stability": 99,
+"grade": "A",
+"ai": null
+},
+"8617380": {
+"math": 39.4,
+"stability": 98,
+"grade": "A",
+"ai": null
+},
+"8764333": {
+"math": 13.9,
+"stability": 100,
+"grade": "A",
+"ai": null
+},
+"8828297": {
+"math": 40.6,
+"stability": 98,
+"grade": "A",
+"ai": null
+},
+"8903897": {
+"math": 84.9,
+"stability": 98,
+"grade": "A",
+"ai": null
+},
+"8996501": {
+"math": 81.0,
+"stability": 61,
+"grade": "C",
+"ai": null
+},
+"9352796": {
+"math": 46.1,
+"stability": 95,
+"grade": "A",
+"ai": null
+},
+"9424477": {
+"math": 75.6,
+"stability": 54,
+"grade": "D",
+"ai": null
+},
+"9752400": {
+"math": 68.6,
+"stability": 88,
+"grade": "A",
+"ai": null
+},
+"9889148": {
+"math": 78.6,
+"stability": 100,
 "grade": "A",
 "ai": null
 }
