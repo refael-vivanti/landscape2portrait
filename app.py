@@ -47,8 +47,10 @@ FOE_COLOR = (255, 0, 255)      # magenta (BGR) — epipole / heading
 # Data loading
 # --------------------------------------------------------------------------- #
 
+@st.cache_data(show_spinner=False)
 def load_index():
-    # Not cached: metadata is overwritten live by the batch, so always read fresh.
+    # Cached for snappy slider scrubbing; use the sidebar "Reload data" button
+    # (clears the cache) after reprocessing videos.
     if not os.path.isdir(META_DIR):
         return {}
     out = {}
@@ -60,6 +62,31 @@ def load_index():
             except Exception:
                 pass
     return out
+
+
+@st.cache_resource(show_spinner=False)
+def get_capture(path):
+    """Cached VideoCapture so the frame slider doesn't reopen the file each tick."""
+    return cv2.VideoCapture(path)
+
+
+@st.cache_data(show_spinner=False)
+def storyboard_tiles(name, mtime):
+    """Render the 16 storyboard thumbnails once per video (cached). mtime keys the
+    cache so it refreshes when the video is reprocessed."""
+    meta = load_index().get(name, {})
+    fbi = {f["i"]: f for f in meta.get("frames", [])}
+    tiles = []
+    for s in meta.get("storyboard", []):
+        fpath = os.path.join(ROOT, s["frame"])
+        if not os.path.exists(fpath):
+            tiles.append((None, f"{s['t']}s —"))
+            continue
+        img = cv2.imread(fpath)
+        img = draw_overlays(img, fbi.get(s["i"], {}),
+                            draw_sal_path=os.path.join(ROOT, s["saliency"]), label=False)
+        tiles.append((to_rgb(img), f'{s["t"]}s'))
+    return tiles
 
 
 def frame_by_index(meta, idx):
@@ -136,12 +163,19 @@ def render_overview(index, history, current_algo):
         if isinstance(ai, (int, float)):
             ais.append(ai)
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Videos", len(index))
-    c2.metric("Mean math score", f"{np.mean(maths):.1f}%" if maths else "—")
-    c3.metric("Mean stability", f"{np.mean(stabs):.0f}/100" if stabs else "—")
+    c1.metric("Videos", len(index), help="Number of videos processed in this batch.")
+    c2.metric("Mean math score", f"{np.mean(maths):.1f}%" if maths else "—",
+              help="Average, across all videos, of how much important content the "
+                   "crop keeps in frame (people/faces + eye-catching areas). "
+                   "Higher = less important stuff cut off.")
+    c3.metric("Mean stability", f"{np.mean(stabs):.0f}/100" if stabs else "—",
+              help="Average camera steadiness across all videos (0–100). "
+                   "Higher = smoother crops; lower = more jumping side-to-side.")
     c4.metric("Mean AI score",
               f"{np.mean(ais):.2f}" if ais else "—",
-              help=f"{len(ais)} of {len(index)} scored")
+              help="Average of the vision-AI (Gemini) 1–5 ratings — how well a "
+                   f"film-director-like AI thinks the crops work. {len(ais)} of "
+                   f"{len(index)} videos scored so far.")
     gc = Counter(grades)
     st.caption("Stability grade counts — "
                + " · ".join(f"**{g}**: {gc.get(g, 0)}" for g in "ABCDF"))
@@ -233,6 +267,9 @@ OVERVIEW = "📊 Overview"
 
 names = list(index.keys())
 st.sidebar.header("Videos")
+if st.sidebar.button("🔄 Reload data", help="Re-read metadata after reprocessing videos"):
+    st.cache_data.clear()
+    st.rerun()
 n_new = sum(1 for m in index.values() if m.get("algo_version", 1) >= CURRENT_ALGO)
 st.sidebar.caption(f"{len(names)} processed · {n_new} on current algo (v{CURRENT_ALGO})")
 # mark each entry: algo freshness (✅/⚠️) + stability grade colour dot
@@ -272,19 +309,25 @@ stab = meta.get("stability", {})
 grade = stab.get("grade")
 gcolor = {"A": "🟢", "B": "🟢", "C": "🟡", "D": "🟠", "F": "🔴"}.get(grade, "")
 
+HELP_MATH = ("How much of the important stuff the crop keeps in frame, averaged over "
+             "every frame. It checks: are the detected people/faces inside the crop, "
+             "and how much of the 'eye-catching' area is kept? 100% = nothing important "
+             "was cut off. (Weighted 70% people/faces, 30% eye-catching areas.)")
+HELP_AI = ("A vision AI (Google Gemini) looks at the 16-frame storyboard and rates the "
+           "crop 1–5 like a film director would: did it keep the subject in view, and "
+           "does the camera movement feel natural rather than jumpy? 5 = great.")
+HELP_STAB = ("How steady the camera-like motion is, A (best) to F (worst). It punishes "
+             "the crop jumping side-to-side across the frame. A = smooth glide, "
+             "F = jerks around a lot. The /100 number is the same thing as a score.")
+
 e1, e2, e3 = st.columns(3)
 e1.metric("📐 Average Math Score",
-          f"{avg_math * 100:.1f}%" if avg_math is not None else "—",
-          help="Mean of the per-frame quality score: 0.7·object-coverage + "
-               "0.3·saliency-coverage inside the crop window.")
+          f"{avg_math * 100:.1f}%" if avg_math is not None else "—", help=HELP_MATH)
 e2.metric("🤖 AI Director Score",
           f"{ai_score:.1f} / 5.0" if isinstance(ai_score, (int, float)) else "—",
-          help="VLM rating of the storyboard (subject retention + temporal "
-               "flow). Run the batch with --ai-eval to populate.")
+          help=HELP_AI + " Run the batch with --ai-eval to populate.")
 e3.metric("📈 Stability grade",
-          f"{gcolor} {grade}" if grade else "—",
-          help="Camera-work steadiness (A best … F worst) from the crop "
-               "trajectory: penalises large side-to-side swings + pan busyness.")
+          f"{gcolor} {grade}" if grade else "—", help=HELP_STAB)
 if grade:
     e3.caption(f"{stab.get('score')}/100 · {stab.get('big_swings')} big swings")
 if meta.get("ai_reasoning"):
@@ -299,28 +342,22 @@ c2.metric("Frames", meta["n_frames"])
 c3.metric("Crop width", meta["crop_width"])
 c4.metric("Target", meta["terminal"]["source"] + (" ✈️" if fwd else ""))
 
-# ---- storyboard (15 frames across the clip, single row) ----
-st.subheader("Storyboard — 15 frames across the clip"
+# ---- storyboard (16 frames across the clip, two rows) ----
+st.subheader("Storyboard — 16 frames across the clip"
              + ("  ✈️ forward motion (epipole tracked)" if fwd else ""))
 st.caption("🟩 crop · 🟦 faces · 🟨 people · 🔴 saliency"
            + ("  · ✚ heading (epipole)" if fwd else ""))
 
-story = meta.get("storyboard", [])
-if story:
-    per_row = (len(story) + 1) // 2          # two rows (e.g. 8 + 7)
-    for group in (story[:per_row], story[per_row:]):
+tiles = storyboard_tiles(choice, os.path.getmtime(os.path.join(META_DIR, choice + ".json")))
+if tiles:
+    per_row = (len(tiles) + 1) // 2          # two rows (e.g. 8 + 8)
+    for group in (tiles[:per_row], tiles[per_row:]):
         cols = st.columns(per_row)
-        for k, s in enumerate(group):
-            fpath = os.path.join(ROOT, s["frame"])
-            spath = os.path.join(ROOT, s["saliency"])
-            if not os.path.exists(fpath):
-                cols[k].caption(f"{s['t']}s —")
-                continue
-            img = cv2.imread(fpath)
-            fmeta = frame_by_index(meta, s["i"])
-            img = draw_overlays(img, fmeta, draw_sal_path=spath, label=False)
-            cols[k].image(to_rgb(img), caption=f'{s["t"]}s',
-                          use_container_width=True)
+        for k, (rgb, cap_txt) in enumerate(group):
+            if rgb is None:
+                cols[k].caption(cap_txt)
+            else:
+                cols[k].image(rgb, caption=cap_txt, use_container_width=True)
 
 # ---- interactive inspector ----
 st.subheader("Frame-by-frame inspector")
@@ -330,12 +367,11 @@ st.caption(f"Frame {idx} of {n - 1}  ·  t = {round(idx / (meta['fps'] or 30), 2
 fmeta = frame_by_index(meta, idx)
 
 src = meta.get("path")
-cap = cv2.VideoCapture(src) if src else None
+cap = get_capture(src) if src else None          # cached: no reopen per slider tick
 frame = None
 if cap is not None and cap.isOpened():
     cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
     ok, frame = cap.read()
-    cap.release()
 
 left, right = st.columns([3, 1])
 if frame is not None:
