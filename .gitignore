@@ -19,8 +19,9 @@ models/*.pt
 .env
 *.key
 
-# ---- Runtime logs ----
+# ---- Runtime logs / archives ----
 logs/
+*.zip
 
 # ---- Video inputs / rendered outputs / cached frames ----
 # Source clips are never committed. Rendered 9:16 videos and cached storyboard
@@ -36,3 +37,6 @@ frames/
 # metadata/*.json IS committed (lightweight, the deliverable of the algorithm).
 !metadata/
 !metadata/*.json
+# sample_outputs/ holds 10 curated results committed for reviewers to watch.
+!sample_outputs/
+!sample_outputs/*.mp4
