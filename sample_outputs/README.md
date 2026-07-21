@@ -1,25 +1,27 @@
 # Sample outputs
 
-Ten pre-rendered results — **two per crop-strategy category** — so you can watch
-the algorithm's behaviour without running anything. Regenerate all 118 with
+These are ten finished results you can watch without running anything — two from
+each of the five kinds of shot we identified, so you can see how the different
+behaviours look in practice. To generate the rest, run
 `python batch.py --folder /path/to/videos`.
 
-For each clip:
-- `<id>_portrait.mp4` — the **9:16 deliverable** (the converted video).
-- `<id>_overlay.mp4` — the **original 16:9 with the moving green crop box** (and a
-  magenta heading marker on forward-motion clips). This is the clearest way to see
-  *what the algorithm decided*. (Downscaled/compressed here to keep the repo light;
-  full-res versions come out of a fresh render.)
+For each clip there are two files. The `_portrait` one is the actual deliverable:
+the video converted to tall 9:16. The `_overlay` one is the original wide video
+with the chosen crop drawn on top as a green box (plus a small marker on drone
+shots showing the point the camera is heading toward). The overlay is the clearest
+way to *see the decision* — watch where the box goes and why. We've compressed the
+overlays a little to keep the repository small; a fresh render produces them at full
+resolution.
 
-| Category (crop strategy) | Clip | What to look for |
+| The kind of shot | Clip | What to watch for |
 |---|---|---|
-| **1. Fixed center anchor** | `10398657` | aerial road held centered on the vanishing point |
-| | `13965282` | Victory Column stays centered while the drone orbits |
-| **2. Fixed off-center anchor** | `14627395` | coastal cliff held off-center (rule-of-thirds) during the tilt |
-| | `12142075` | bee-covered honeycomb kept slightly right; blurred background dropped |
-| **3. Dynamic subject follow** | `11353413` | crop pans to follow the red kayak across the beach |
-| | `16436843` | tracks the skateboarder through the trick |
-| **4. Pan/reveal follow** | `10388072` | rides the night-city pan, re-centering on the lit facades |
-| | `14369070` | follows the indoor-soccer pan toward the densest player cluster |
-| **5. Narrative handoff / priority switch** | `11967303` | woman first, then hands off to the overlook/water |
-| | `16577316` | shifts between kite/person action clusters as they appear |
+| **Hold something centred** | `10398657` | the road stays centred on the point the drone flies toward |
+| | `13965282` | the monument stays centred while the drone circles it |
+| **Hold something off-centre** | `14627395` | the cliff is held off to one side through the tilt |
+| | `12142075` | the bee-covered comb stays framed; the blurred background is dropped |
+| **Follow one moving subject** | `11353413` | the crop slides along to follow the red kayak |
+| | `16436843` | it tracks the skateboarder through the whole trick |
+| **Ride a pan and reveal** | `10388072` | it moves with the night-city pan, settling on the lit storefronts |
+| | `14369070` | it follows the pan toward wherever the players are densest |
+| **Change subject over time** | `11967303` | it starts on the woman, then hands off to the view she's looking at |
+| | `16577316` | it shifts between the kite-surfers as they come and go |
